@@ -60,6 +60,13 @@ cp jetty.xml.in /opt/zimbra/jetty/etc/jetty.xml.in
 chown zimbra.zimbra /opt/zimbra/jetty/etc/jetty.xml.in
 ```
 
+Replace php.ini
+
+```bash
+cp /etc/php.ini /etc/php.ini.backup
+cp php.ini /etc/php.ini
+```
+
 Restart Zimbra Mailbox
 
 ```bash
