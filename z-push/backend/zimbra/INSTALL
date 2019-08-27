@@ -1,0 +1,584 @@
+==============  Z-Push-2 Zimbra Backend - Installation Notes - Release 68  ==============
+
+**  RELEASE 68 is designed to work with Z-Push 2.4 or later  **
+
+Z-PUSH 2.4.x is now stable - but is still under development - There is still the possibility 
+that updates to Z-PUSH will break things in the ZIMBRA backend from time to time. Any
+issues found should be reported on the Support Ticket Tracker on the SourceForge web site
+https://sourceforge.net/p/zimbrabackend/support-requests/  They will be addressed as 
+quickly as possible. 
+
+
+SHOW YOUR APPRECIATION
+If you would like to show your appreciation for the work that goes into this zimbra backend
+please send a donation via 
+https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=7X94XCP9A5ZYG&lc=IE&currency_code=EUR&bn=PP%2dDonationsBF%3abtn_donateCC_LG%2egif%3aNonHosted
+
+
+New For Release 65 and later. A bash shell script is being provided to simplify the basic deployment
+of the zimbra backend. Instructions are as follows :-
+Usage: zpzb-install NN - where NN is the Backend Release No
+1. Login as root
+2. Place this script and the latest downloaded zimbraNN.tgz file in the [z-push home]/backend directory.
+3. chmod +700 zpzb-install.sh to make it executable
+4. Execute the script by typing  ./zpzb-install.sh NN
+     The latest zimbraNN.tgz will be extracted into a directory zimbraNN
+     If there is an existing zimbra backend directory it will be backed up as zimbra.preNN
+     The existing backend files will be replaced with the latest release files except for
+     those files that contain user settings
+     Owner and selinux permissions will be set on the folders/files to match those on z-push
+5. Check the output for files that may not have been updated automatically and compare and update as appropriate
+
+ 
+NEW For Release 63 and later. The code to recognise the UserAgent of various devices and to
+enable multi-folder support where appropriate has been reworked. The configuration information
+is now broken out into a separate file zimbraMultiFolderUAs.php. To add multi-folder support
+for any new device simply edit this file and add a new line to the array, setting the appropriate
+switches for the different folder types. An upcoming change to the z-push core will allow 
+retrieval from the state files of the UserAgent for clients such as some Windows clients that do
+not supply their UserAgent on every request. 
+
+
+STARTING WITH Release 57 - SmartFolders ARE ENABLED BY DEFAULT 
+If you are upgrading and wish to continue to use XML files, you need to ensure that you have
+	define('ZIMBRA_SMART_FOLDERS',false);
+in your zimbra backend config.php file. 
+
+
+ZIMBRA 8.0 AND LATER - DoSFilter MUST whitelist z-push server
+Assuming that z-push is not running on the same IP address as zimbra, if you are running
+zimbra 8.0 or later, you MUST whitelist the IP Address of the z-push server to avoid 
+connection issues. See http://wiki.zimbra.com/wiki/DoSFilter
+For 8.0.0-8.0.2 see 
+http://www.zimbra.com/forums/announcements/60397-zcs-dosfilter-workaround-zcs-8-0-1-8-0-2-a.html
+	
+
+ZIMBRA 7.2 AND LATER - Configure Max SOAP Sessions per User
+If you have users who have multiple devices synching against their account at the same time there is 
+a potential issue with the number of allowed SOAP sessions per user. This was highlighted in a zimbra 
+bugzilla ticket and was fixed in zimbra release 7.2 and later - where you can now increase the number. 
+See https://bugzilla.zimbra.com/show_bug.cgi?id=75338 ; Providing the ability to increase the number 
+of Soap sessions. I set the value to 7 on my server and typically don't see the issue any more. 
+Typical evidence of this problem is sync loops and content disappearing from the view pane of the Web 
+client while a device is synching through activesync.
+
+
+ZIMBRA 6.0.4 AND EARLIER - BROKEN WITH Z-Push 2
+These releases of zimbra have a bug in the JSON output of commands that breaks the 
+json_decode parser. If you wish to use z-push-2 with the zimbra backend you must update
+to a newer zimbra release.  See zimbra bugzilla for details :- 
+http://bugzilla.zimbra.com/show_bug.cgi?id=42867
+
+
+
+NEW FOR RELEASE 57 & Later - Notes Support - Task Folders named "Notes" or "Notes?????"
+Release 57 introduced support for synching StickyNotes. As zimbra does not have any native
+Notes Folders (up to Zimbra 8) the decision was made to sync the Notes from the device to 
+Tasks folders. Tasks can be created/updated at any time in any folder without the need for 
+To/From addresses/etc. that would be required for an email. This makes the task data type 
+a great match for synching with StickyNotes from the device. As a result of this change, any
+existing Tasks folder that happens to have a name starting with "Notes" (case-insensitive)
+will be treated as a Notes folder after installing Release 57 or later. If you have existing 
+folders you do not want treated as Notes files, rename them before updating the backend.
+A folder named "Notes" will be treated as the primary StickyNotes folder. Folders named 
+"Notes????" will be treated as additional User StickyNotes folders. To date this functionality
+has only been tested with an iPhone running iOS7. 
+
+
+
+NEW FOR RELEASE 55 & Later - The archive also includes a zimbra specific config.php that 
+should reside in the zimbra backend folder. Update this default version with your site 
+specific ZIMBRA_xxxxxx settings. If you are updating an existing z-push-2 installation, 
+once you have updated the zimbra/config.php file, edit the overall z-push-2 config.php 
+and remove all the ZIMBRA_xxxxxx settings from that file. The only "zimbra" setting that 
+should remain in the overall config.php file is the BACKEND_PROVIDER setting.
+  
+  
+Install Z-Push-2 as per supplied instructions - Be sure to read the instructions as the 
+installation defaults have changed from z-push 1.5.n
+
+In the z-push-2 "backend" folder, make a new sub-folder called "zimbra"
+
+Copy all the files from the archive to the "backend/zimbra" folder - *Note* - if you had
+previously used an alpha/beta version of the backend, the utils.php file from that 
+version should now be removed as it is no longer needed.
+
+Read all the configuration option notes so you can decide what way you want to configure
+your setup. Pay particular attention to SmartFolders and user.XML files - as they are 
+mutually exclusive. 
+
+If you intend to use user.XML files, create a "zimbra" folder in the z-push root folder
+and set the permissions so that your web server can read it. You will need to create your
+user.XML files in this folder.
+
+
+
+Edit the file config.php in the z-push main folder
+
+Find the backend provider initialization - and replace with Zimbra - as follows
+
+    $BACKEND_PROVIDER = "BackendZimbra";
+
+Add the appropriate zimbra configuration directives in accordance with your needs. 
+See notes below, reproduced from the top of the zimbra.php file, for details of 
+the various configuration directives. 
+
+
+For the default timezone - in case your php timezone is not set correctly - you will
+need to edit the file z-push2/lib/core/zpush.php  and search for the line
+
+                date_default_timezone_set('Europe/Amsterdam');
+
+Replace the timezone as required. 
+
+
+When adding your account to your phone/device, DO NOT ENABLE SMS/Text Message Sync. 
+
+For many Phones the default when talking to a server reporting AS14 protocol is to
+turn on the option to sync SMS/Texts. Be sure to uncheck the option before saving your profile. 
+zimbra as of release 7.2 does not have a way to store SMS messages so they cannot be synched.
+If you inadvertantly set up your account with SMS sync turned on, remove the account and re-add 
+it. The z-push team are working on a dummy sync scheme that will allow the phone to think it is 
+synching SMS messages with a server that does not have the capability built in.
+
+
+So - if SMS sync is going to cause problems - why report the server as AS14 ? - you might ask.
+
+Besides SMS sync, AS14 also adds many other features above and beyond AS12.1 that make it worth 
+the hassle of managing the SMS sync issues. It adds the ability to resolve recipients for emails, 
+check free/busy times when creating appointments amongst others. 
+
+
+* Config File   :   === Replace ===
+*                   $BACKEND_PROVIDER = "BackendZimbra";
+*
+*                   === Add the appropriate directives from below as required for your setup ===
+*                   === Url to access zimbra server - no trailing slash ===
+*                   The ZIMBRA_URL should be set to the value of the setting publicURL on the zimbra 
+*                   server configuration. This should allow requests to the mail server to be properly 
+*                   routed/proxied as appropriate by zimbra.
+*
+*                   define('ZIMBRA_URL', 'http[s]://<zimbra url>');
+*
+*                   By default the zimbra backend does not enforce certificate validation for connections 
+*                   to zimbra as many people run zimbra FOSS using self-signed certificates. If verification 
+*                   is required uncomment the following options and set the values to true as required. 
+*                   These flags were added for PHP 5.6 and later compatability as the PHP default changed to
+*                   enforcing validation for cURL/stream contexts. If these flags are not set or are set to
+*                   false the behaviour of the zimbra backend will be as it was prior to that PHP change.	
+*                   define('ZIMBRA_SSL_VERIFYPEER', true);
+*                   define('ZIMBRA_SSL_VERIFYHOST', true);
+*                   
+*                   When using external LDAP authentication zimbra can send a redirect page when the user
+*                   attempts to login. In this case for z-push to work it is necessary to enable the option
+*                   ZIMBRA_URL_ALLOW_REDIRECT. Simply uncomment the line below to enable it.	
+*                   define('ZIMBRA_URL_ALLOW_REDIRECT', true); 
+*                   
+*                   By default, if the configured ZIMBRA_URL does not match the zimbraPublicURL then
+*                   it will be overridden by the zimbraPublicURL. If there is some overriding reason
+*                   to prevent this from happening (I can't think of one) then this can be disabled 
+*                   by adding the directive 
+*                   define('ZIMBRA_DISABLE_URL_OVERRIDE', true); 
+*                   to the zimbra backend config.php file
+*
+*                   === If you intend to use user.XML files
+*                   define('ZIMBRA_USER_DIR', 'zimbra');
+*                   AND - As of Release 57 - you will need to disable SmartFolders (see below)
+*                   define('ZIMBRA_SMART_FOLDERS',false);
+*
+*                   === To enable sync of contact pictures ===
+*                   define('ZIMBRA_SYNC_CONTACT_PICTURES', true);
+*
+*                   === To enable virtual contacts/appointments/tasks ===
+*                   ActiveSync clients by default only allows a single Calendar, Contacts folder, 
+*                   and Tasks folder to sync to the device. Apple have found a way around this and
+*                   natively support multiple folders. If you enable VIRTUAL folders with these 
+*                   these directives, then all appointments from other calendars for example will 
+*                   be virtually included in the primary Calendar so they will sync to the device. 
+*                   On zimbra they will remain separate. There is no way on the device to distinguish
+*                   which appointments came from which Calendar folder. 
+*                   define('ZIMBRA_VIRTUAL_CONTACTS',true);
+*                   define('ZIMBRA_VIRTUAL_APPOINTMENTS',true);
+*                   define('ZIMBRA_VIRTUAL_TASKS',true);
+*                   define('ZIMBRA_VIRTUAL_NOTES',true);
+*
+*                   === To prevent sync of the "emailed contacts" folder
+*                   define('ZIMBRA_IGNORE_EMAILED_CONTACTS',true);
+*
+*                   === To enable HTML email for MIME supporting devices - mainly Apple iPxxx ===
+*                   define('ZIMBRA_HTML',true);
+*
+*                   === To ensure that the device uses a valid zimbra email address for the account ===
+*                   define('ZIMBRA_ENFORCE_VALID_EMAIL',true);
+*
+*                   NOTE: As of Release 57 - Smart Folders are now ENABLED BY DEFAULT
+*                   === To DISABLE the Smart Folders feature ===
+*                   NOTE: Disabling SmartFolders will ALLOW user.XML processing
+*                         It will also rename/resequence folder ID's in the state file for
+*                         the device - so some resyncing will occur
+*                   define('ZIMBRA_SMART_FOLDERS',false); 
+*
+*                   === To Disable Sync of any Folder Type System-wide ===
+*                   Add the appropriate definition from this block, and set it true
+*                   NOTE: Devices will need a full-resync to remove the unwanted content
+*                   define('ZIMBRA_DISABLE_MESSAGES',true); 
+*                   define('ZIMBRA_DISABLE_CONTACTS',true); 
+*                   define('ZIMBRA_DISABLE_APPOINTMENTS',true); 
+*                   define('ZIMBRA_DISABLE_TASKS',true); 
+*                   define('ZIMBRA_DISABLE_NOTES',true); 
+*                   define('ZIMBRA_DISABLE_DOCUMENTS',true); 
+*
+*                   === To Enable Login Retries When Host Cannot Be Contacted ===
+*                   If, for example, you shutdown zimbra to perform maintenance or backups
+*                   and you find your clients (android in particular) are just giving up 
+*                   too quickly on trying to reconnect, enable this setting and set it to
+*                   whatever value is appropriate for your environment.
+*                   A setting of 5 means zimbra.php will make 5 retry attempts, each one
+*                   following a 60 second sleep. If all 6 attempts fail an error will be
+*                   returned to the phone. The phone should then retry a number of times 
+*                   itself. Monitor thread usage to make sure you don't run too many. 
+*                   define('ZIMBRA_RETRIES_ON_HOST_CONNECT_ERROR',5);
+*
+*                   === To Enable Debug Information for ALL users ===
+*                   This will output the Folder Lists from Setup() and the SOAP Requests/Responses
+*                   define('ZIMBRA_DEBUG',true); 
+*
+*                   === To Enable Debug Information for selected user(s) ===
+*                   define('ZIMBRA_DEBUG','user1,user2'); 
+*
+*                   === To Disable Debug Information ===
+*                   define('ZIMBRA_DEBUG',false); 
+*
+*                   === To Define a Custom MB String Detect Order ===
+*                   In case the default mb_detect_order of 'ASCII, UTF-8, ISO-8859-1, ISO-8859-15'
+*                   does not work for your region (eg Japan) you can override it with this setting
+*                   adding your own encodings in the appropriate sequence. See PHP documentation for
+*                   mb_detect_order for details. Be careful of the sequence of charsets.
+*                   define('ZIMBRA_MB_DETECT_ORDER','ASCII, ISO-2022-JP, UTF-8, ISO-8859-1, ISO-8859-15'); 
+*
+*
+*                   === FOR z-push-2 ONLY - Local Message Cache ===
+*                   For z-push-2 added local caching of MessageLists to reduce server load on
+*                   initial sync where the same unchanged lists will be queried repeatedly 
+*                   within a short space of time. The default is for this feature to be enabled
+*                   with each folder cache having a lifetime of 3600 seconds.
+*                   
+*                   This feature is enabled by default - but can be disabled by adding a new 
+*                   config.php directive 
+*                   define('ZIMBRA_LOCAL_CACHE', false);
+*                   
+*                   The cache for each folder has a default lifetime of 3600 seconds. This can 
+*                   be adjusted	by adding an additional directive
+*                   define('ZIMBRA_LOCAL_CACHE_LIFETIME', 300);
+*
+*
+*                   === To Enable Sending of Calendar Invites/Replies ===
+*                   For z-push-2 added a configuration parameter to specify if the server should
+*                   send Calendar Invites/Replies. As most modern devices now send the invitations
+*                   and replies directly to the addressees, this is assumed to be false. In order to 
+*                   change the setting, add the following parameter to the zimbra backend config.php 
+*                   and set the value to true. This parameter replaces the old logic that made the 
+*                   decision based on the client being Apple or not. 
+*                   (Note: With SmartFolders this setting can be overridden per device - see below)
+*                   define('ZIMBRA_SERVER_INVITE_REPLY', true);
+*
+*
+* Feature Disable:  Several users have asked over time if it is possible to turn off Email sync or
+*                   Calendar sync for an entire installation. Up to now it has only been possible
+*                   through a hack to force all users to read a particular XML file.
+*                   
+*                   This release makes it possible to turn off individual folder types through the 
+*                   config file. Enabling any of these switches will turn off that folder type (for 
+*                   example email) for every user of the system. It will prevent all users from 
+*                   syncing their email to their mobile devices.
+*                   
+*                   The default setting remains that these switches are either not present - or are 
+*                   set to false - in which case all folder types will be available for synching.
+*                   
+*                   === To Disable Sync of any Folder Type System-wide ===
+*                   Add the appropriate definition from this block to config.php, and set it true
+*                   NOTE: Devices will need a full-resync to remove the unwanted content
+*                   define('ZIMBRA_DISABLE_MESSAGES',true); 
+*                   define('ZIMBRA_DISABLE_CONTACTS',true); 
+*                   define('ZIMBRA_DISABLE_APPOINTMENTS',true); 
+*                   define('ZIMBRA_DISABLE_TASKS',true); 
+*                   define('ZIMBRA_DISABLE_NOTES',true); 
+*                   define('ZIMBRA_DISABLE_DOCUMENTS',true); 
+*                   
+*                   === To Disable the breaking out of Calendars and Contact Groups on devices ===
+*                   Prior to Release 57 it was only Apple devices that were known to support the display 
+*                   of multiple zimbra calendars - each with it's own colouring. 
+*                   Release 57 now also enabled multi Calendar/Task folder support for Outlook 2013 and
+*                   the Windows 8+ WindowsMail client. These clients do not support multiple Contact
+*                   groups though - so virtual contact still need to be used for them.
+*                   By default, if an Apple device is identified, Calendars/Contacts & Tasks in custom
+*                   folders will be passed to the device in separate calendars/folders. This allows the
+*                   device user to select what they want to display. 
+*                   In order to prevent devices synching many different folders, the administrator can 
+*                   disable the support of multiple calendars and/or multiple contact folder using these 
+*                   configuration settings. 
+*                   define('ZIMBRA_DISABLE_MULTI_CALENDARS',true); 
+*                   define('ZIMBRA_DISABLE_MULTI_CONTACT_GROUPS',true); 
+*                   define('ZIMBRA_DISABLE_MULTI_TASK_LISTS',true); 
+*                   define('ZIMBRA_DISABLE_MULTI_NOTE_LISTS',true); 
+*                   Note that if any 'Multi' feature is disabled, the behaviour of the backend will return to 
+*                   that which was in place before the breakout ability was added. i.e. all items will get
+*                   virtually included in the primary folder (assuming virtual support is turned on)
+*
+*
+* SmartFolders:     Starting from Release 57 - SmartFolders is enabled by default. You must specifically
+*                   disable the feature if you wish to use XML files.
+*                   
+*                   Historically in the zimbra backend, there has been the ability to manipulate the 
+*                   number and types of folders that could be synced for an individual user through the  
+*                   use of user.XML configuration files. While this worked well, it meant that the system 
+*                   administrator had to be involved in every change for every user. 
+*                   
+*                   The introduction of SmartFolders as an alternative to XML files made it easy for users
+*                   to manipulate their syncing content themselves by simply renaming folders in the Zimbra
+*                   Web Client.
+*                   
+*                   Note that SmartFolders and XML files are mutually exclusive on the server. As of Release
+*                   57 SmartFolders MUST BE DISABLED in order to allow the use of user.XML files. 
+*                   
+*                   To DISABLE the feature set ZIMBRA_SMART_FOLDERS to false in config.php
+*                   
+*                   When enabled, the final character in a folders name can take on special meanings as 
+*                   follows :-
+*                    "-" Do not include this folder or any sub-folders thereof
+*                    "." Include this folder - But do not include any sub-folders thereof
+*                   
+*                   So for example you might have a top level folder called "Archive-" into which you  
+*                   move all old folders that you do not want to be able to see from your device.
+*                   
+*                   Or you might have a "ToBeFiled." folder that contains a number of child folders used
+*                   for longer term storage of reference emails. Naming it with a period (.) on the end
+*                   will allow you to see that folder on your phone - so you can move emails in there to
+*                   clear your Inbox - and then when you get to your desktop you can file all the emails
+*                   into the appropriate child folders. 
+*                   
+*                   NOTE: As of Release 57 - Smart Folders are now ENABLED BY DEFAULT
+*                   === To DISABLE the Smart Folders feature ===
+*                   NOTE: Disabling SmartFolders will ALLOW user.XML processing
+*                         It will also rename/resequence folder ID's in the state file for
+*                         the device - so some resynching will occur
+*                   define('ZIMBRA_SMART_FOLDERS', false); 
+*                   
+*                   User control of Folder types
+*                   ----------------------------
+*                   NOTE: z-push does not do hierarchy resync properly at this time - so if a user wishes 
+*                   to make changes to their sync rules using the following directives, they should first
+*                   remove the sync account from their phone - then make the changes - then re-add the 
+*                   account to their phone. 
+*                   
+*                   When SmartFolders are configured, in instances where individual users wish to disable 
+*                   particular folder types from syncing to their devices, a special top-level folder 
+*                   structure can be used to configure those options. This provides the major filtering
+*                   capability that would have been available through user.XML files. 
+*                   
+*                   If a folder named '*SyncConfig*' is found, the system will use any child folders in
+*                   that folder to configure options. 
+*                   
+*                   The names of the sub-folders will be interpreted as configuration directives.
+*                   
+*                   These should have the format of 
+*                   <folder type>&<setting=value>[&<setting=value>& ...]
+*                   
+*                   <folder type> can be any one of message, contact, appointment, task, note and 
+*                   <setting=value> can be any one of 
+*                   active=true/false - active=false will disable sync of that folder type
+*                   virtual=true/false - virtual=false will turn of sync of additional folders (not
+*                                        applicable for message type)
+*                   primary=FolderName - setting primary will override the default primary folder for
+*                                        that content type (Inbox, Contacts, Calendar, Tasks)
+*                   
+*                   So, for example, you could have 
+*                   
+*                   *SyncConfig* 
+*                      message&active=false            to disable email sync
+*                      task&active=true&virtual=false  to limit the task sync to the default primary folder
+*                      appointment&active=true&virtual=false&primary=WorkCalendar  to limit 
+*                                                       appointment sync to the WorkCalendar folder
+*                      
+*                   The *SyncConfig* folder, and it's contents will never be synced to the phone so
+*                   long as ZIMBRA_SMART_FOLDERS is set to true.
+*                   
+*                   User control of Mobile Sender Name
+*                   ----------------------------------
+*                   In case the user's display name contains non-ascii characters, and it gets corrupted
+*                   when sending emails from the device, a sendasname directive can be used to provide a
+*                   MIME-encoded Sender Name to be used by the backend.
+*
+*                   To get the correctly formatted name, send yourself an email through the web
+*                   client, and then right-click on the received email and Show Original. Look for
+*                   the From: header and copy the name from there. Don't include the email address
+*                   part - or any surrounding "" marks. Note that the encoding zimbra uses will most
+*                   likely be utf-8 rather than ISO-8859-1 as seen in the following example
+*
+*                   For example 
+*
+*                   *SyncConfig* 
+*                      sendasname&=?ISO-8859-1?Q?Andr=E9?= Pirard 
+*                   The example above is taken from the rfc2047 document, and appears in a CC:
+*                   CC: =?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>
+*                   For reference: http://www.faqs.org/rfcs/rfc2047.html
+*
+*                   User control of Mobile Sender Email Address
+*                   -------------------------------------------
+*                   In case the user wishes to override their default email address when sending emails
+*                   from the device, a sendasemail directive can be used to provide an alternative 
+*                   email address
+*
+*                   For example 
+*
+*                   *SyncConfig* 
+*                      sendasemail&john.doe@whatever.com
+*
+*                   Note: If ZIMBRA_ENFORCE_VALID_EMAIL is true, this address will be ignored if it
+*                         has not been defined as a valid alias for the user on the zimbra server
+*
+*
+*                   User control of Server Originated Calendar Invites/Replies
+*                   ----------------------------------------------------------
+*                   In case the user wishes to override the server setting for sending Calendar 
+*                   Invites/Replies from the server they can add a serverinvitereply directive. 
+*                   The user can then turn on or off the setting for one or more devices by 
+*                   specifying each deviceID and a true/false value
+*
+*                   For example 
+*
+*                   *SyncConfig* 
+*                      serverinvitereply&deviceid1=true&deviceid2=false
+*
+*                   It is only necessary to list devices for which the user wishes to override the 
+*                   server default setting
+*
+*
+* User Files    :   NOTE THAT USER FILES ARE MUTUALLY EXCLUSIVE FROM SMART FOLDERS
+*
+*                   The user files are to be saved in the location specified for ZIMBRA_USER_DIR.
+*                   This must be a subdirectory for the base directory.  Each user file must be named
+*                   using the user's user ID (not their email address) from Zimbra and have the file
+*                   extension .xml.  Make sure the files have read permission.
+*
+*                   WARNING: Before changing the content of a User's XML file, set the sync schedule to
+*                   manual on the device, or remove the profile entirely. And when finished, if the
+*                   profile was not first removed then request a full-resync of the client before
+*                   changing back to an automatic sync schedule.
+*                   Explanation: User files effectively fool the device into thinking that some folders
+*                   on the server that the device would normally see do not exist - AND/OR - that some
+*                   folders that the device would not normally see are actually available to it. As a
+*                   result, changing the contents of the XML file should not be done without doing a 
+*                   full resync of the device. In the absence of doing this problems can occur that
+*                   could lead to the loss of data on the server.
+*                   For example - removing an include for a folder will make the device think the 
+*                   folder has been deleted, and will trigger a delete for the client. This delete will
+*                   cause a change-in-state on the client that will trigger a parallel delete on the
+*                   server on the next sync. This will then delete the real server copy of that folder
+*                   which would result in the loss of data.
+*                   Making the changes offline, followed by a full-resync eliminates this risk.
+*
+*                   SendAsName and SendAsEmail are used for the organizer of appointments.
+*
+*                   Multiple profiles are supported for a single user.  For example, if a user has two
+*                   devices and wants one set of folders and one particular calendar on one device and
+*                   a different set of folders and a different calendar on the other, the user can
+*                   accomplish this by using profiles.  To determine which profile the device users,
+*                   specify the profile ID in the domain when setting up the account (See also roaming/
+*                   timezone setting below).  Z-Push doesn't care what value is entered for a domain.
+*                   If the ID is left blank for a profile, this is assumed to be the default.
+*
+*                   For each component, only use exclude or include, not both.  If exclude is used,
+*                   all folders are included except those marked as excluded.  If include is used,
+*                   only those folders specified are included.  The preference is to specify folders
+*                   by their ID but since this isn't easy to do, name is acceptable.  However, it must
+*                   be the same way througout: don't specify some folders by ID and others by name. If
+*                   recursive is set to true, all child folders will be included/excluded.
+*
+*                   WARNING: If any folder names have an ampersand in them, you must use &amp;
+*
+*                   <zimbrabackend user="">
+*                       <profile id="" usehtml="false" sendasname="" sendasemail="" timezone="">
+*                           <message active="true|false">
+*                               [ <include [id=""|name=""] [recursive="true|false"]/> | <exclude [id=""|name=""] [recursive="true|false"]/> ... ]
+*                               [ <searchfolder [id=""|name=""] [recursive="true|false"]/> ... ]
+*                           </message>
+*                           <contact active="true|false" virtual="true|false">
+*                               <primary [id=""|name=""]/>
+*                               [ <include [id=""|name=""] [recursive="true|false"]/> | <exclude [id=""|name=""] [recursive="true|false"]/> ... ]
+*                           </contact>
+*                           <appointment active="true|false" virtual="true|false">
+*                               <primary [id=""|name=""]/>
+*                               [ <include [id=""|name=""] [recursive="true|false"]/> | <exclude [id=""|name=""] [recursive="true|false"]/> ... ]
+*                           </appointment>
+*                           <task active="true|false" virtual="true|false">
+*                               <primary [id=""|name=""]/>
+*                               [ <include [id=""|name=""] [recursive="true|false"]/> | <exclude [id=""|name=""] [recursive="true|false"]/> ... ]
+*                           </task>
+*                       </profile>
+*                   </zimbrabackend>
+*
+*                   Release 64 added a new capability - to define a global settings file to be used by
+*                   default for all users. For example adding the new setting
+*                   define('ZIMBRA_USER_XML_DEFAULT','default.xml');
+*                   to the zimbra config.php file will apply the settings in default.xml to every user
+*                   unless they have a specific file created for their account. 
+*                   Note that sendasname and sendasemail are not supported in the global file. Also, note
+*                   that if a specific file is created for the user it will be used instead of the default 
+*                   file - the settings are not additive.
+*
+* Timezones     :   To handle the situation where a user is not in the same timezone as the zimbra server
+*                   whether just roaming, or on a permanent basis, the user can specify their current 
+*                   timezone in the domain field when setting up the account (see also profile identifier
+*                   above). Refer to the php timezones list (http://www.php.net/manual/en/timezones.php)
+*                   Specify the preferred timezone in the domain field using @Region/City. 
+*                   Note: If used in conjunction with the profile identifier, specify the combined
+*                   information as profileId@Region/City
+*
+* Zimbra 5      :   The timezone handling built into this PHP script is for the new standard timezone
+* Compatability :   definitions used by zimbra 6 - details as listed above. However, there are still some
+*                   people using zimbra 5.0.xx and that version used a completely different methodology
+*                   for handling timezones. Zimbra 5 shipped with a file called timezones.ics located in 
+*                   /opt/zimbra/conf/ - this file contains definitions of all the usable timezones. 
+*
+*                   In order to provide compatability between this script and zimbra 5, a new lookup file
+*                   has been added for 5.0 users called v5timezone.xml, which should be copied to the 
+*                   z-push/backend/ folder with the zimbra.php script. The format of the file is
+*                   <zimbratimezones>
+*                   	<timezone	id="Europe/Dublin"	v5id="(GMT) Greenwich Mean Time - Dublin / Edinburgh / Lisbon / London" />
+*                   	<timezone	id="Europe/London"	v5id="(GMT) Greenwich Mean Time - Dublin / Edinburgh / Lisbon / London" />
+*                      	<timezone	id="Europe/Paris"	v5id="(GMT+01.00) Brussels / Copenhagen / Madrid / Paris" />
+*                   </zimbratimezones>
+*                   where id="" is the zimbra 6 timezone, and v5id="" is the timezones.ics equivalent 
+*                   from zimbra 5.
+*
+*                   These are the only 3 timezones added to the shipped version of the file. If you want 
+*                   add timezones for your particular region, please refer to both timezones.ics on your 
+*                   zimbra 5 server, and http://www.php.net/manual/en/timezones.php to map the additional 
+*                   timezones. If people want to post their timezones up on a thread on the support forum
+*                   on sourceforge, we can possibly add additional ones to the shipped file going forward.
+*
+*                   In order to use the compatability fix, it must be possible for this script to find
+*                   your preferred timezone in v6 format. So, it must be defined in the @Region/City 
+*                   format in your domain field (see above) or in the Region/City format in a user.XML file
+*                   (see above) or it must be possible to lookup your default in the v5timezone.xml file
+*                   using your v5 preferred timezone as returned by zimbra. 
+*
+*                   Please search the log file for "NOT FOUND in v5timezone.xml" after turning on z-push
+*                   with v5 in order to make sure you have defined all the timezones you need.
+*
+* RTF fields    :   To handle RTF fields in appointment/task/contact where no Body field is received
+*                   zimbra.php requires z_RTF.php include file from as12 branch of z-push SVN to decode
+*                   the Compressed RTF stream. This situation can commonly occur with non-English clients
+*
+* PHP.ini File  :   === Replace ===
+*                   max_execution_time = 120      (Maximum execution time of each script, in seconds)
+*                   memory_limit = 256M           (Maximum amount of memory a script may consume)
+*
+* Dependencies  :   php-curl
+*
+* References    :   http://www.plymouth.edu/webapp/code/zimbra.class.phps
+*
+* This file is distributed under GPL v2.
+* Consult LICENSE file for details
+************************************************/
