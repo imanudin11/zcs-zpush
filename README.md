@@ -15,11 +15,13 @@ yum install git php-cli php-soap php-process php-mbstring -y
 Clone repo
 
 [source, bash]
+----
 git clone https://github.com/imanudin11/zcs-zpush.git
-
+----
 
 Create folder for log
 
+[source, bash]
 ----
 mkdir /var/lib/z-push /var/log/z-push
 chmod 755 /var/lib/z-push /var/log/z-push
@@ -28,18 +30,21 @@ chown zimbra:zimbra /var/lib/z-push /var/log/z-push
 
 Save z-push folder on /opt/
 
+[source, bash]
 ----
 cp -rvf z-push /opt/
 ----
 
 Create symlink
 
+[source, bash]
 ----
 ln -sf /opt/z-push /opt/zimbra/jetty/webapps/
 ----
 
 Save php script on /usr/bin
 
+[source, bash]
 ----
 cp php-cgi-fix.sh /usr/bin/php-cgi-fix.sh
 chmod +x /usr/bin/php-cgi-fix.sh
@@ -47,6 +52,7 @@ chmod +x /usr/bin/php-cgi-fix.sh
 
 Change publicHostname domain on your Zimbra into localhost
 
+[source, bash]
 ----
 su - zimbra -c 'zmprov md yourzimbradomain.tld zimbraPublicServiceHostname localhost'
 su - zimbra -c 'zmprov md yourzimbradomain.tld zimbraPublicServiceProtocol https'
@@ -54,6 +60,7 @@ su - zimbra -c 'zmprov md yourzimbradomain.tld zimbraPublicServiceProtocol https
 
 Backup and replace jetty.xml.in
 
+[source, bash]
 ----
 cp /opt/zimbra/jetty/etc/jetty.xml.in /opt/zimbra/jetty/etc/jetty.xml.in.backup
 cp jetty.xml.in /opt/zimbra/jetty/etc/jetty.xml.in
@@ -62,6 +69,7 @@ chown zimbra.zimbra /opt/zimbra/jetty/etc/jetty.xml.in
 
 Restart Zimbra Mailbox
 
+[source, bash]
 ----
 su - zimbra -c 'zmmailboxdctl restart'
 ----
