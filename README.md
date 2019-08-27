@@ -5,12 +5,12 @@ This repository is source for integrating Zimbra Single Server and Z-Push + Zimb
 
 Install dependecies
 
-----
+```bash
 yum install epel-release -y
 yum update -y
 yum upgrade -y
 yum install git php-cli php-soap php-process php-mbstring -y
------
+```
 
 Clone repo
 
