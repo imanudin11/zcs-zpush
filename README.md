@@ -14,9 +14,9 @@ yum install git php-cli php-soap php-process php-mbstring -y
 
 Clone repo
 
-----
+[source, bash]
 git clone https://github.com/imanudin11/zcs-zpush.git
-----
+
 
 Create folder for log
 
