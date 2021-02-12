@@ -67,11 +67,11 @@ su - zimbra -c 'zmprov md yourzimbradomain.tld zimbraPublicServiceProtocol https
 
 For Zimbra 8.8.6
 
-'''bash
+```bash
 cp /opt/zimbra/jetty/etc/jetty.xml.in /opt/zimbra/jetty/etc/jetty.xml.in.backup
 cp jetty.xml.in-for-zcs-886 /opt/zimbra/jetty/etc/jetty.xml.in
 chown zimbra.zimbra /opt/zimbra/jetty/etc/jetty.xml.in
-'''
+```
 
 For Zimbra 8.8.7
 
@@ -82,47 +82,47 @@ chown zimbra.zimbra /opt/zimbra/jetty/etc/jetty.xml.in
 ```
 For Zimbra 8.8.8 – Zimbra 8.8.12
 
-'''bash
+```bash
 cp /opt/zimbra/jetty/etc/jetty.xml.in /opt/zimbra/jetty/etc/jetty.xml.in.backup
 cp jetty.xml.in-for-zcs-888-8812 /opt/zimbra/jetty/etc/jetty.xml.in
 chown zimbra.zimbra /opt/zimbra/jetty/etc/jetty.xml.in
-'''
+```
 
 For Zimbra 8.8.15
 
-'''bash
+```bash
 cp /opt/zimbra/jetty/etc/jetty.xml.in /opt/zimbra/jetty/etc/jetty.xml.in.backup
 cp jetty.xml.in-for-zcs-8815 /opt/zimbra/jetty/etc/jetty.xml.in
 chown zimbra.zimbra /opt/zimbra/jetty/etc/jetty.xml.in
-'''
+```
 
 For Zimbra 9
 
-'''bash
+```bash
 cp /opt/zimbra/jetty/etc/jetty.xml.in /opt/zimbra/jetty/etc/jetty.xml.in.backup
 cp jetty.xml.in-for-zcs-9 /opt/zimbra/jetty/etc/jetty.xml.in
 chown zimbra.zimbra /opt/zimbra/jetty/etc/jetty.xml.in
-'''
+```
 
 # Add zpush.ini into php
 
 For CentOS 7
 
-'''bash
+```bash
 cp zpush.ini /etc/php.d/zpush.ini
-'''
+```
 
 For Ubuntu 16.04
 
-'''bash
+```bash
 cp zpush.ini /etc/php/7.0/cgi/conf.d/10-zpush.ini
-'''
+```
 
 For Ubuntu 18.04
 
-'''bash
+bash
 cp zpush.ini /etc/php/7.2/cgi/conf.d/10-zpush.ini
-'''
+```
 
 Restart Zimbra Mailbox
 
