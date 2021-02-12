@@ -120,7 +120,7 @@ cp zpush.ini /etc/php/7.0/cgi/conf.d/10-zpush.ini
 
 For Ubuntu 18.04
 
-bash
+```bash
 cp zpush.ini /etc/php/7.2/cgi/conf.d/10-zpush.ini
 ```
 
