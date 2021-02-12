@@ -28,7 +28,7 @@
     // To configure the ZimbraBackend uncomment the appropriate line below and customize as
     // required.
 //    define('ZIMBRA_URL', 'http://zimbraServerName');
-      define('ZIMBRA_URL', 'https://localhost');
+    define('ZIMBRA_URL', 'https://localhost');
 //    define('ZIMBRA_URL', 'http://127.0.0.1');  
 //    define('ZIMBRA_URL', 'https://127.0.0.1');  
 
@@ -60,7 +60,7 @@
     // the potential issues with locking out accounts/dropping data from devices/etc. by 
     // holding open login sessions and retrying the authentication a number of times at 60
     // second intervals. The default setting allows for 5 minutes of downtime. 
-	define('ZIMBRA_RETRIES_ON_HOST_CONNECT_ERROR',5);
+	define('ZIMBRA_RETRIES_ON_HOST_CONNECT_ERROR',2);
 
     // If the ZimbraBackend is being setup to use the old style XML configuration files
     // a folder must be specified where these files will reside. The ZIMBRA_USER_DIR 
@@ -193,9 +193,13 @@
     // 'setup' - only the additional logging in the folder selection functions is enabled
     // 'username' - zimbra additional logging is enabled for one user - username
     // 'user1,user2,user3,etc' - zimbra additional logging is enabled for the list of users
-//	define('ZIMBRA_DEBUG',true);
-//	define('ZIMBRA_DEBUG','setup');
-//	define('ZIMBRA_DEBUG','username');
+//    define('ZIMBRA_DEBUG',true);
+//    define('ZIMBRA_DEBUG','setup');
+//    define('ZIMBRA_DEBUG','username');
+//    define('ZIMBRA_DEBUG','vincents@itsolutions.ie,joeb');
+//    define('ZIMBRA_DEBUG','vincents@itsolutions.ie,vincents');
+//    define('ZIMBRA_DEBUG','vincents');
+//    define('ZIMBRA_DEBUG','itsadmin@itsolutions.ie');
 	
     // ZIMBRA_HTML is a legacy setting that enabled HTML emails on Apple devices (an any others
     // that advertized mimesupport) when using ActiveSync protocol level 2.5 or lower. Newer

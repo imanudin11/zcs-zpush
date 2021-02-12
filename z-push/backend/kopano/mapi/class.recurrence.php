@@ -19,8 +19,6 @@
 
     /**
      * Recurrence
-     * @author Steve Hardy <steve@zarafa.com>
-     * @author Michel de Ron <michel@zarafa.com>
      */
     class Recurrence extends BaseRecurrence
     {
@@ -60,51 +58,56 @@
          * Constructor
          * @param resource $store MAPI Message Store Object
          * @param resource $message the MAPI (appointment) message
+         * @param array    $proptags an associative array of protags and their values.
          */
-        function __construct($store, $message)
+        function __construct($store, $message, $proptags = [])
         {
 
-            $properties = array();
-            $properties["entryid"] = PR_ENTRYID;
-            $properties["parent_entryid"] = PR_PARENT_ENTRYID;
-            $properties["message_class"] = PR_MESSAGE_CLASS;
-            $properties["icon_index"] = PR_ICON_INDEX;
-            $properties["subject"] = PR_SUBJECT;
-            $properties["display_to"] = PR_DISPLAY_TO;
-            $properties["importance"] = PR_IMPORTANCE;
-            $properties["sensitivity"] = PR_SENSITIVITY;
-            $properties["startdate"] = "PT_SYSTIME:PSETID_Appointment:0x820d";
-            $properties["duedate"] = "PT_SYSTIME:PSETID_Appointment:0x820e";
-            $properties["recurring"] = "PT_BOOLEAN:PSETID_Appointment:0x8223";
-            $properties["recurring_data"] = "PT_BINARY:PSETID_Appointment:0x8216";
-            $properties["busystatus"] = "PT_LONG:PSETID_Appointment:0x8205";
-            $properties["label"] = "PT_LONG:PSETID_Appointment:0x8214";
-            $properties["alldayevent"] = "PT_BOOLEAN:PSETID_Appointment:0x8215";
-            $properties["private"] = "PT_BOOLEAN:PSETID_Common:0x8506";
-            $properties["meeting"] = "PT_LONG:PSETID_Appointment:0x8217";
-            $properties["startdate_recurring"] = "PT_SYSTIME:PSETID_Appointment:0x8235";
-            $properties["enddate_recurring"] = "PT_SYSTIME:PSETID_Appointment:0x8236";
-            $properties["recurring_pattern"] = "PT_STRING8:PSETID_Appointment:0x8232";
-            $properties["location"] = "PT_STRING8:PSETID_Appointment:0x8208";
-            $properties["duration"] = "PT_LONG:PSETID_Appointment:0x8213";
-            $properties["responsestatus"] = "PT_LONG:PSETID_Appointment:0x8218";
-            $properties["reminder"] = "PT_BOOLEAN:PSETID_Common:0x8503";
-            $properties["reminder_minutes"] = "PT_LONG:PSETID_Common:0x8501";
-            $properties["recurrencetype"] = "PT_LONG:PSETID_Appointment:0x8231";
-            $properties["contacts"] = "PT_MV_STRING8:PSETID_Common:0x853a";
-            $properties["contacts_string"] = "PT_STRING8:PSETID_Common:0x8586";
-            $properties["categories"] = "PT_MV_STRING8:PS_PUBLIC_STRINGS:Keywords";
-            $properties["reminder_time"] = "PT_SYSTIME:PSETID_Common:0x8502";
-            $properties["commonstart"] = "PT_SYSTIME:PSETID_Common:0x8516";
-            $properties["commonend"] = "PT_SYSTIME:PSETID_Common:0x8517";
-            $properties["basedate"] = "PT_SYSTIME:PSETID_Appointment:0x8228";
-            $properties["timezone_data"] = "PT_BINARY:PSETID_Appointment:0x8233";
-            $properties["timezone"] = "PT_STRING8:PSETID_Appointment:0x8234";
-            $properties["flagdueby"] = "PT_SYSTIME:PSETID_Common:0x8560";
-            $properties["side_effects"] = "PT_LONG:PSETID_Common:0x8510";
-            $properties["hideattachments"] = "PT_BOOLEAN:PSETID_Common:0x8514";
+            if ($proptags) {
+                $this->proptags = $proptags;
+            } else {
+                $properties = array();
+                $properties["entryid"] = PR_ENTRYID;
+                $properties["parent_entryid"] = PR_PARENT_ENTRYID;
+                $properties["message_class"] = PR_MESSAGE_CLASS;
+                $properties["icon_index"] = PR_ICON_INDEX;
+                $properties["subject"] = PR_SUBJECT;
+                $properties["display_to"] = PR_DISPLAY_TO;
+                $properties["importance"] = PR_IMPORTANCE;
+                $properties["sensitivity"] = PR_SENSITIVITY;
+                $properties["startdate"] = "PT_SYSTIME:PSETID_Appointment:0x820d";
+                $properties["duedate"] = "PT_SYSTIME:PSETID_Appointment:0x820e";
+                $properties["recurring"] = "PT_BOOLEAN:PSETID_Appointment:0x8223";
+                $properties["recurring_data"] = "PT_BINARY:PSETID_Appointment:0x8216";
+                $properties["busystatus"] = "PT_LONG:PSETID_Appointment:0x8205";
+                $properties["label"] = "PT_LONG:PSETID_Appointment:0x8214";
+                $properties["alldayevent"] = "PT_BOOLEAN:PSETID_Appointment:0x8215";
+                $properties["private"] = "PT_BOOLEAN:PSETID_Common:0x8506";
+                $properties["meeting"] = "PT_LONG:PSETID_Appointment:0x8217";
+                $properties["startdate_recurring"] = "PT_SYSTIME:PSETID_Appointment:0x8235";
+                $properties["enddate_recurring"] = "PT_SYSTIME:PSETID_Appointment:0x8236";
+                $properties["recurring_pattern"] = "PT_STRING8:PSETID_Appointment:0x8232";
+                $properties["location"] = "PT_STRING8:PSETID_Appointment:0x8208";
+                $properties["duration"] = "PT_LONG:PSETID_Appointment:0x8213";
+                $properties["responsestatus"] = "PT_LONG:PSETID_Appointment:0x8218";
+                $properties["reminder"] = "PT_BOOLEAN:PSETID_Common:0x8503";
+                $properties["reminder_minutes"] = "PT_LONG:PSETID_Common:0x8501";
+                $properties["recurrencetype"] = "PT_LONG:PSETID_Appointment:0x8231";
+                $properties["contacts"] = "PT_MV_STRING8:PSETID_Common:0x853a";
+                $properties["contacts_string"] = "PT_STRING8:PSETID_Common:0x8586";
+                $properties["categories"] = "PT_MV_STRING8:PS_PUBLIC_STRINGS:Keywords";
+                $properties["reminder_time"] = "PT_SYSTIME:PSETID_Common:0x8502";
+                $properties["commonstart"] = "PT_SYSTIME:PSETID_Common:0x8516";
+                $properties["commonend"] = "PT_SYSTIME:PSETID_Common:0x8517";
+                $properties["basedate"] = "PT_SYSTIME:PSETID_Appointment:0x8228";
+                $properties["timezone_data"] = "PT_BINARY:PSETID_Appointment:0x8233";
+                $properties["timezone"] = "PT_STRING8:PSETID_Appointment:0x8234";
+                $properties["flagdueby"] = "PT_SYSTIME:PSETID_Common:0x8560";
+                $properties["side_effects"] = "PT_LONG:PSETID_Common:0x8510";
+                $properties["hideattachments"] = "PT_BOOLEAN:PSETID_Common:0x8514";
 
-            $this->proptags = getPropIdsFromStrings($store, $properties);
+                $this->proptags = getPropIdsFromStrings($store, $properties);
+            }
 
             parent::__construct($store, $message);
         }
@@ -226,7 +229,6 @@
             }
 
             $baseday = $this->dayStartOf($base_date);
-            $basetime = $baseday + $this->recur["startocc"] * 60;
             $extomodify = false;
 
             for($i = 0, $len = count($this->recur["changed_occurences"]); $i < $len; $i++) {
@@ -373,8 +375,6 @@
          */
         function isValidReminderTime($basedate, $reminderminutes, $startdate)
         {
-            $isreminderrangeset = false;
-
             // get all occurence items before the seleceted items occurence starttime
             $occitems = $this->getItems($this->messageprops[$this->proptags["startdate"]], $this->toGMT($this->tz, $basedate));
 
@@ -706,7 +706,7 @@
               $props[PR_DISPLAY_NAME] = "Exception";
               $props[PR_EXCEPTION_STARTTIME] = $this->fromGMT($this->tz, $exception_props[$this->proptags["startdate"]]);
               $props[PR_EXCEPTION_ENDTIME] = $this->fromGMT($this->tz, $exception_props[$this->proptags["duedate"]]);
-              mapi_message_setprops($attachment, $props);
+              mapi_setprops($attachment, $props);
 
             $imessage = mapi_attach_openobj($attachment, MAPI_CREATE | MAPI_MODIFY);
 
@@ -736,12 +736,12 @@
                 }
             }
 
-            mapi_message_setprops($imessage, $props);
+            mapi_setprops($imessage, $props);
 
             $this->setExceptionRecipients($imessage, $exception_recips, true);
 
-            mapi_message_savechanges($imessage);
-            mapi_message_savechanges($attachment);
+            mapi_savechanges($imessage);
+            mapi_savechanges($attachment);
         }
 
         /**
@@ -789,13 +789,14 @@
          */
         function getExceptionAttachment($base_date)
         {
-            // Retrieve only embedded messages
+            // Retrieve only exceptions which are stored as embedded messages
             $attach_res = Array(RES_AND,
                             Array(
                                 Array(RES_PROPERTY,
-                                    Array(RELOP => RELOP_EQ,
+                                    Array(
+                                        RELOP => RELOP_EQ,
                                         ULPROPTAG => PR_ATTACH_METHOD,
-                                        VALUE => array(PR_ATTACH_METHOD => 5)
+                                        VALUE => array(PR_ATTACH_METHOD => ATTACH_EMBEDDED_MSG)
                                     )
                                 )
                             )
@@ -811,7 +812,13 @@
 
                     $data = mapi_message_getprops($exception, array($this->proptags["basedate"]));
 
-                    if(isset($data[$this->proptags["basedate"]]) && $this->isSameDay($this->fromGMT($this->tz,$data[$this->proptags["basedate"]]), $base_date)) {
+                    if(!isset($data[$this->proptags["basedate"]])) {
+                        // if no basedate found then it could be embedded message so ignore it
+                        // we need proper restriction to exclude embedded messages aswell
+                        continue;
+                    }
+
+                    if($this->isSameDay($this->fromGMT($this->tz, $data[$this->proptags["basedate"]]), $base_date)) {
                         return $tempattach;
                     }
                 }
@@ -895,7 +902,7 @@
                     continue;
 
                 array_push($items, $this->getExceptionProperties($exception));
-                if($limit && (count($items) == $limit))
+                if((count($items) == $limit))
                     break;
                 }
         }
@@ -1061,7 +1068,7 @@
             }
 
             // Add organizer to meeting only if it is not organized.
-            $msgprops = mapi_getprops($exception, array(PR_SENT_REPRESENTING_ENTRYID, PR_SENT_REPRESENTING_EMAIL_ADDRESS, PR_SENT_REPRESENTING_NAME, PR_SENT_REPRESENTING_ADDRTYPE, $this->proptags['responsestatus']));
+            $msgprops = mapi_getprops($exception, array(PR_SENT_REPRESENTING_ENTRYID, PR_SENT_REPRESENTING_EMAIL_ADDRESS, PR_SENT_REPRESENTING_NAME, PR_SENT_REPRESENTING_ADDRTYPE, PR_SENT_REPRESENTING_SEARCH_KEY, $this->proptags['responsestatus']));
             if (isset($msgprops[$this->proptags['responsestatus']]) && $msgprops[$this->proptags['responsestatus']] != olResponseOrganized){
                 $this->addOrganizer($msgprops, $exception_recips['add']);
             }
@@ -1069,7 +1076,7 @@
             // Remove all deleted recipients
             if (isset($exception_recips['remove'])) {
                 foreach ($exception_recips['remove'] as &$recip) {
-                    if (!isset($recipient[PR_RECIPIENT_FLAGS]) || $recip[PR_RECIPIENT_FLAGS] != (recipReserved | recipExceptionalDeleted | recipSendable)) {
+                    if (!isset($recip[PR_RECIPIENT_FLAGS]) || $recip[PR_RECIPIENT_FLAGS] != (recipReserved | recipExceptionalDeleted | recipSendable)) {
                         $recip[PR_RECIPIENT_FLAGS] = recipSendable | recipExceptionalDeleted;
                     } else {
                         $recip[PR_RECIPIENT_FLAGS] = recipReserved | recipExceptionalDeleted | recipSendable;
@@ -1116,7 +1123,7 @@
             }
 
             // Add organizer to meeting only if it is not organized.
-            $msgprops = mapi_getprops($message, array(PR_SENT_REPRESENTING_ENTRYID, PR_SENT_REPRESENTING_EMAIL_ADDRESS, PR_SENT_REPRESENTING_NAME, PR_SENT_REPRESENTING_ADDRTYPE, $this->proptags['responsestatus']));
+            $msgprops = mapi_getprops($message, array(PR_SENT_REPRESENTING_ENTRYID, PR_SENT_REPRESENTING_EMAIL_ADDRESS, PR_SENT_REPRESENTING_NAME, PR_SENT_REPRESENTING_ADDRTYPE, PR_SENT_REPRESENTING_SEARCH_KEY, $this->proptags['responsestatus']));
             if (isset($msgprops[$this->proptags['responsestatus']]) && $msgprops[$this->proptags['responsestatus']] != olResponseOrganized){
                 $this->addOrganizer($msgprops, $exception_recips);
             }
@@ -1125,7 +1132,7 @@
                 foreach($recipientRows as $key => $recipient) {
                     $found = false;
                     foreach($exception_recips as $excep_recip) {
-                        if (isset($recipient[PR_SEARCH_KEY]) && isset($excep_recip[PR_SEARCH_KEY]) && $recipient[PR_SEARCH_KEY] == $excep_recip[PR_SEARCH_KEY])
+                        if (isset($recipient[PR_SEARCH_KEY], $excep_recip[PR_SEARCH_KEY]) && $recipient[PR_SEARCH_KEY] == $excep_recip[PR_SEARCH_KEY])
                             $found = true;
                     }
 
@@ -1201,8 +1208,8 @@
          * @param array $recipients    recipients list of message.
          * @param boolean $isException true if we are processing recipient of exception
          */
-        function addOrganizer($messageProps, &$recipients, $isException = false){
-
+        function addOrganizer($messageProps, &$recipients, $isException = false)
+        {
             $hasOrganizer = false;
             // Check if meeting already has an organizer.
             foreach ($recipients as $key => $recipient){
@@ -1225,6 +1232,7 @@
                 $organizer[PR_ADDRTYPE] = empty($messageProps[PR_SENT_REPRESENTING_ADDRTYPE])?'SMTP':$messageProps[PR_SENT_REPRESENTING_ADDRTYPE];
                 $organizer[PR_RECIPIENT_TRACKSTATUS] = olRecipientTrackStatusNone;
                 $organizer[PR_RECIPIENT_FLAGS] = recipSendable | recipOrganizer;
+                $organizer[PR_SEARCH_KEY] = $messageProps[PR_SENT_REPRESENTING_SEARCH_KEY];
 
                 // Add organizer to recipients list.
                 array_unshift($recipients, $organizer);
