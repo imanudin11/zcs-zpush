@@ -28,6 +28,7 @@ require_once 'config.php';
 
 class ZPushAutodiscover {
     const ACCEPTABLERESPONSESCHEMAMOBILESYNC = 'http://schemas.microsoft.com/exchange/autodiscover/mobilesync/responseschema/2006';
+	const ACCEPTABLERESPONSESCHEMAOUTLOOK = 'http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a';
     const MAXINPUTSIZE = 8192; // Bytes, the autodiscover request shouldn't exceed that value
 
     private static $instance;

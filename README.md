@@ -59,8 +59,7 @@ chmod +x /usr/bin/php-cgi-fix.sh
 Change publicHostname domain on your Zimbra into localhost
 
 ```bash
-su - zimbra -c 'zmprov md yourzimbradomain.tld zimbraPublicServiceHostname localhost'
-su - zimbra -c 'zmprov md yourzimbradomain.tld zimbraPublicServiceProtocol https'
+su - zimbra -c 'zmprov md yourzimbradomain.tld zimbraPublicServiceHostname localhost zimbraPublicServiceProtocol https'
 ```
 
 # Backup and replace jetty.xml.in

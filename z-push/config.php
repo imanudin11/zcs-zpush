@@ -44,8 +44,6 @@
     // set to false to disable this behaviour.
     // common values: 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP' (casing is ignored)
     define('USE_CUSTOM_REMOTE_IP_HEADER', false);
-    define('USE_X_FORWARDED_FOR_HEADER', false);
-
 
     // When using client certificates, we can check if the login sent matches the owner of the certificate.
     // This setting specifies the owner parameter in the certificate to look at.
@@ -147,13 +145,13 @@
  *  Mobile settings
  */
     // Device Provisioning
-    define('PROVISIONING', false);
+    define('PROVISIONING', true);
 
     // This option allows the 'loose enforcement' of the provisioning policies for older
     // devices which don't support provisioning (like WM 5 and HTC Android Mail) - dw2412 contribution
     // false (default) - Enforce provisioning for all devices
     // true - allow older devices, but enforce policies on devices which support it
-    define('LOOSE_PROVISIONING', true);
+    define('LOOSE_PROVISIONING', false);
 
     // The file containing the policies' settings.
     // Set a full path or relative to the z-push main directory

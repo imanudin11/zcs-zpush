@@ -1,8 +1,8 @@
 <?php
-$GLOBALS['revision'] = "69"; // Used to output the script version to the debug log
+$GLOBALS['revision'] = "69.2"; // Used to output the script version to the debug log
 /***********************************************
 * File          :   zimbra.php
-* Revision      :   69 (8-Jan-2020)
+* Revision      :   69.2 (09-Mar-2021)
 * Project       :   Z-Push Zimbra Backend
 *                   https://sourceforge.net/projects/zimbrabackend
 * Description   :   A backend for Z-Push to use with the Zimbra Collaboration Suite,
@@ -13,7 +13,12 @@ $GLOBALS['revision'] = "69"; // Used to output the script version to the debug l
 *                   Mathias Kolb
 *                   Julien Laurent
 *
-* Changes       :   Changes Made To Revision 69: z-push-2 version ONLY
+* Changes       :   Changes Made To Revision 70: z-push-2 version ONLY
+*                     - Workaround Z-Push issue in SmartForward/SmartReply from shared folder
+*                     - Add 2 to continue statement in GetNextMessageBlock for Contacts
+*                     - Throw AuthenticationRequiredException for AUTH failures
+*
+*                   Changes Made To Revision 69: z-push-2 version ONLY
 *                     - Added descriptive WARN message for unavailable shared folder
 *                     - In isZimbraObjectInSyncInterval treat no response as false
 *                     - Fix processing of zimbraMailAlias to handle string if exactly one alias
@@ -745,7 +750,7 @@ class BackendZimbra extends BackendDiff {
      * @return string       AS version constant
      */
     public function GetSupportedASVersion() {
-        return ZPush::ASV_14; 
+        return ZPush::ASV_141; 
     }
 
     /** Logon
@@ -1202,7 +1207,11 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
 
                     if (!$response) {
                         ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->Logon(): ' . 'END Logon - Proxy Error { connected = false }');
-                        throw new ServiceUnavailableException("Access denied. Proxy unable to reach user mailbox server");
+                        if (isset($this->_soapError) && (($this->_soapError == "account.AUTH_FAILED") || ($this->_soapError == "service.AUTH_EXPIRED"))) {
+                            throw new AuthenticationRequiredException("Zimbra->SoapRequest(): Auth Error - Force client to reconnect.");
+                        } else {
+                            throw new ServiceUnavailableException("Access denied. Proxy unable to reach user mailbox server");
+                        }
                         return false;
                     }
 
@@ -1318,7 +1327,11 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
 
                     if (!$response) {
                         ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->Logon(): ' . 'END Logon - Proxy Error { connected = false }');
-                        throw new ServiceUnavailableException("Access denied. Proxy unable to reach user mailbox server");
+                        if (isset($this->_soapError) && (($this->_soapError == "account.AUTH_FAILED") || ($this->_soapError == "service.AUTH_EXPIRED"))) {
+                            throw new AuthenticationRequiredException("Zimbra->SoapRequest(): Auth Error - Force client to reconnect.");
+                        } else {
+                            throw new ServiceUnavailableException("Access denied. Proxy unable to reach user mailbox server");
+                        }
                         return false;
                     }
 
@@ -3960,7 +3973,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeFolder(): ' .  'OldID is set - Want t
                         // Find The Contact Type And Exclude Contact Groups
                         if (isset($items[$i]['_attrs']['type'])) {
                             if ($items[$i]['_attrs']['type'] == "group") {
-                                continue;
+                                continue 2;
                             }
                         }
                         break;
@@ -7242,7 +7255,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetAllBodyRecursive(): ' .  'Inline Image ?
 
         // check if the message is in the current syncinterval
         if (($id != "") && (!$this->isZimbraObjectInSyncInterval($folderid, $id, $contentParameters)))
-            throw new StatusException(sprintf("Zimbra->DeleteMessage('%s'): Message is outside the sync interval and so far not deleted.", $id), SYNC_STATUS_OBJECTNOTFOUND);
+            throw new StatusException(sprintf("Zimbra->ChangeMessage('%s'): Message is outside the sync interval and so far not deleted.", $id), SYNC_STATUS_OBJECTNOTFOUND);
 
 
         // When Zimbra moves an item from a folder owned by one UserID to a folder owned by another UserID
@@ -9489,7 +9502,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SetMessageFlag(): ' .  'Setting Flag' );
 
         // check if the message is in the current syncinterval
         if (!$this->isZimbraObjectInSyncInterval($folderid, $id, $contentParameters))
-            throw new StatusException(sprintf("Zimbra->DeleteMessage('%s'): Message is outside the sync interval and so far not deleted.", $id), SYNC_STATUS_OBJECTNOTFOUND);
+            throw new StatusException(sprintf("Zimbra->MoveMessage('%s'): Message is outside the sync interval and so far not deleted.", $id), SYNC_STATUS_OBJECTNOTFOUND);
 
         $index = $this->GetFolderIndex($folderid);
         $view = $this->_folders[$index]->view;
@@ -9577,7 +9590,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SetMessageFlag(): ' .  'Setting Flag' );
                     }
 
                     $preModAppt = $this->GetMessage($folderid, $id, $contentParameters); 
-//                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->DeleteMessage(): ' .  'GetApptReq Original Appt: ' . print_r( $preModAppt, true ), false );
+//                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->MoveMessage(): ' .  'GetApptReq Original Appt: ' . print_r( $preModAppt, true ), false );
 
                     if ($preModAppt->isorganizer == 1) {
                         $invId = $preModAppt->zimbraInvId;
@@ -9655,7 +9668,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SetMessageFlag(): ' .  'Setting Flag' );
      *
      */
     public function DeleteMessage($folderid, $id, $contentParameters) {
-        ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->DeleteMessage(): ' . 'START DeleteMessage { folderid = ' . $folderid . '; id = ' . $id . '; contentParameters = ' . print_r( $contentParameters, true ) . ' }');
+        ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->DeleteMessage(): ' . 'START DeleteMessage { folderid = ' . $folderid . '; id = ' . $id . '; contentParameters = OBJECT }');
+
+$deletesAsMoves =  $contentParameters->GetDeletesAsMoves();
+        ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->DeleteMessage(): ' . 'DeletesAsMoves = [' . $deletesAsMoves . ']');
 
 
         if ($this->_localCache) {
@@ -10986,7 +11002,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
     public function SendMail($syncsm) {
         ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' . 'START SendMail { $syncsm = (excluded); }');
 
-//ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'SyncSm ['.print_r( $syncsm, true ).']' );
+ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'SyncSm ['.print_r( $syncsm, true ).']' );
 
 /*
 class SyncSendMail extends SyncObject {
@@ -11007,17 +11023,24 @@ class SyncSendMailSource extends SyncObject {
     public $instanceid;
 */
 
+		$folderid = false;
 		$forward = false;
 		$reply = false;
         $saveinsent = false;
         $replaceMIME = false;
 
+        if (isset($syncsm->source->folderid)) {
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Folder of Original [' . $folderid .']' );
+            $folderid = $syncsm->source->folderid;
+        }
         if (isset($syncsm->replyflag)) {
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Reply flag is SET' );
             $reply = $syncsm->source->itemid;
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Reply to Item [' . $reply . ']' );
         } elseif (isset($syncsm->forwardflag)) {
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Forward flag is SET' );
             $forward = $syncsm->source->itemid;
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Forward Item [' . $forward . ']' );
 		}
 
         if (isset($syncsm->saveinsent)) {
@@ -11190,7 +11213,14 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Plain-AS-HTML ['.$textash
 
                 ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' . 'Grabbing the Original' );
 
-                $folderid = false;
+                // 20200922 - Code added to prepend folder owner to original for item from shared folder
+				//            This is a workaround for a z-push issue https://forum.kopano.io/topic/3378/smartforward-itemid-in-composemail-object-is-changed
+                $index = $this->GetFolderIndex($folderid);
+                if ($this->_folders[$index]->linkid != '') {
+                    $ownerFolder = explode( ":", $this->_folders[$index]->linkid);
+                    $original = $ownerFolder[0] . ":" . $original;
+                }
+
                 $needHtml = true;
                 $needPlain = true;
                 $orig_calendar = "";
@@ -11981,8 +12011,11 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Plain-AS-HTML ['.$textash
             ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . $this->error);
             $response = false;
             if ($this->_soapError == "service.AUTH_EXPIRED") {
-                ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'zimbra Auth Token has expired - Throw SYNC_COMMONSTATUS_SERVERERROR to force a new connection/re-auth' );
-                throw new StatusException("Zimbra->SoapRequest(): Auth Token Expired - Force client to reconnect.", SYNC_COMMONSTATUS_SERVERERROR);
+                ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'zimbra Auth Token has expired - Throw AuthenticationRequiredException to force a new connection/re-auth' );
+                throw new AuthenticationRequiredException("Zimbra->SoapRequest(): Auth Token Expired - Force client to reconnect.");
+            } elseif ($this->_soapError == "account.AUTH_FAILED") {
+                ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'zimbra Auth Failed - Throw AuthenticationRequiredException to force a new connection/re-auth' );
+                throw new AuthenticationRequiredException("Zimbra->SoapRequest(): Auth Failed - Force client to reconnect.");
             } elseif ($this->_soapError == "service.PERM_DENIED") {
                 ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'SOAP Message: '.$soap_message_debug);
                 ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'SOAP Response: '.$response, false);

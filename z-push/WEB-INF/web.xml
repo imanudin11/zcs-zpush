@@ -1,70 +1,69 @@
 <?xml version="1.0" encoding="ISO-8859-1"?>
-    <web-app
-      xmlns="http://java.sun.com/xml/ns/j2ee"
-      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-      xsi:schemaLocation="http://java.sun.com/xml/ns/j2ee http://java.sun.com/xml/ns/j2ee/web-app_2_4.xsd"
-      version="2.4"
-    >
+<web-app
+  xmlns="http://java.sun.com/xml/ns/j2ee"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://java.sun.com/xml/ns/j2ee http://java.sun.com/xml/ns/j2ee/web-app_2_4.xsd"
+  version="2.4"
+  >
 
-     <display-name>php</display-name>
+  <display-name>php</display-name>
 
-     <servlet>
-       <servlet-name>PHP</servlet-name>
-       <servlet-class>org.eclipse.jetty.servlets.CGI</servlet-class>
-       <load-on-startup>1</load-on-startup>
-	<async-supported>true</async-supported>
-       <init-param>
-            <param-name>commandPrefix</param-name>
-            <param-value>/usr/bin/php-cgi-fix.sh</param-value>
-       </init-param>
+  <servlet>
+   <servlet-name>PHP</servlet-name>
+   <servlet-class>org.eclipse.jetty.servlets.CGI</servlet-class>
+   <load-on-startup>1</load-on-startup>
+   <async-supported>true</async-supported>
+   <init-param>
+    <param-name>commandPrefix</param-name>
+    <param-value>/usr/bin/php-cgi-fix.sh</param-value>
+  </init-param>
 
-          <init-param>
-              <param-name>Path</param-name>
-              <param-value>/bin:/usr/bin:/usr/local/bin</param-value>
-          </init-param>
-        
-     </servlet>
+  <init-param>
+    <param-name>Path</param-name>
+    <param-value>/bin:/usr/bin:/usr/local/bin</param-value>
+  </init-param>
 
-     <servlet-mapping>
-       <servlet-name>PHP</servlet-name>
-       <url-pattern>*.php</url-pattern>
-     </servlet-mapping>
+</servlet>
+
+<servlet-mapping>
+ <servlet-name>PHP</servlet-name>
+ <url-pattern>*.php</url-pattern>
+</servlet-mapping>
 
      <!--
      <welcome-file-list>
        <welcome-file>index.php</welcome-file>
      </welcome-file-list>
-     -->
+   -->
 
-<Call name="addAliasCheck">
+   <Call name="addAliasCheck">
     <Arg>
       <New class="org.eclipse.jetty.server.handler.ContextHandler$ApprovePathPrefixAliases"/>
     </Arg>
   </Call>
 
-<security-constraint>
-        <web-resource-collection>
-            <web-resource-name>deny</web-resource-name>
-            <url-pattern>/backend/*</url-pattern>
-	    <url-pattern>/include/*</url-pattern>
-            <url-pattern>/lib/*</url-pattern>
-	    <url-pattern>/WEB-INF/*</url-pattern>
-	    <url-pattern>/tools/*</url-pattern>
-	    <url-pattern>/vendor/*</url-pattern>
-	    <url-pattern>/autodiscover/*</url-pattern>
-            <url-pattern>/config.php</url-pattern>
-            <url-pattern>/z-push-top.php</url-pattern>
-            <url-pattern>/z-push-admin.php</url-pattern>
-            <url-pattern>/INSTALL</url-pattern>
-            <url-pattern>/LICENSE</url-pattern>
-            <url-pattern>/DEVELOPMENT</url-pattern>
-            <url-pattern>/TRADEMARKS</url-pattern>
-            <url-pattern>/composer.json</url-pattern>
-            <url-pattern>/policies.ini</url-pattern>
-            <url-pattern>/version.php</url-pattern>
-       </web-resource-collection>
-       <auth-constraint>
-       <role-name>deny</role-name>
-    	</auth-constraint>
-       </security-constraint>
+  <security-constraint>
+    <web-resource-collection>
+      <web-resource-name>deny</web-resource-name>
+		<url-pattern>/backend/*</url-pattern>
+		<url-pattern>/include/*</url-pattern>
+		<url-pattern>/lib/*</url-pattern>
+		<url-pattern>/WEB-INF/*</url-pattern>
+		<url-pattern>/tools/*</url-pattern>
+		<url-pattern>/vendor/*</url-pattern>
+		<url-pattern>/config.php</url-pattern>
+		<url-pattern>/z-push-top.php</url-pattern>
+		<url-pattern>/z-push-admin.php</url-pattern>
+		<url-pattern>/INSTALL</url-pattern>
+		<url-pattern>/LICENSE</url-pattern>
+		<url-pattern>/DEVELOPMENT</url-pattern>
+		<url-pattern>/TRADEMARKS</url-pattern>
+		<url-pattern>/composer.json</url-pattern>
+		<url-pattern>/policies.ini</url-pattern>
+		<url-pattern>/version.php</url-pattern>
+    </web-resource-collection>
+    <auth-constraint>
+     <role-name>deny</role-name>
+   </auth-constraint>
+ </security-constraint>
 </web-app>

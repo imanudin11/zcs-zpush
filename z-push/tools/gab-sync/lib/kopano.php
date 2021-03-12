@@ -25,11 +25,11 @@
 
 include_once("syncworker.php");
 
-include_once('mapi/mapi.util.php');
-include_once('mapi/mapidefs.php');
-include_once('mapi/mapitags.php');
-include_once('mapi/mapicode.php');
-include_once('mapi/mapiguid.php');
+include_once('backend/kopano/mapi/mapi.util.php');
+include_once('backend/kopano/mapi/mapidefs.php');
+include_once('backend/kopano/mapi/mapitags.php');
+include_once('backend/kopano/mapi/mapicode.php');
+include_once('backend/kopano/mapi/mapiguid.php');
 
 if (!defined('PR_EMS_AB_THUMBNAIL_PHOTO')) {
     define('PR_EMS_AB_THUMBNAIL_PHOTO', mapi_prop_tag(PT_BINARY, 0x8C9E));
@@ -55,6 +55,12 @@ class Kopano extends SyncWorker {
      */
     public function __construct() {
         parent::__construct();
+
+        // check if the php-mapi classes can be loaded
+        if (!defined('MAPI_E_FAILONEPROVIDER') || !defined('PR_CONTAINER_CLASS') || !function_exists('getPropIdsFromStrings')) {
+            $this->Terminate("Please verify the php-mapi configuration, as the php-mapi includes can not be found in the php include path. Aborting.");
+        }
+
         // send Z-Push version and user agent to ZCP >7.2.0
         if ($this->checkMapiExtVersion('7.2.0')) {
             $this->session = mapi_logon_zarafa(USERNAME, PASSWORD, SERVER, CERTIFICATE, CERTIFICATE_PASSWORD, 0, self::VERSION, self::NAME. " ". self::VERSION);
@@ -236,7 +242,7 @@ class Kopano extends SyncWorker {
         }
         else {
             $this->Log(sprintf("Kopano->clearAllNotCurrentChunkType: found %d invalid items, deleting", $querycnt));
-            $entries = mapi_table_queryallrows($table, array(PR_ENTRYID, $this->mapiprops['chunktype']));
+            $entries = mapi_table_queryrows($table, array(PR_ENTRYID, $this->mapiprops['chunktype']), 0, $querycnt);
             $entry_ids = array_reduce($entries, function ($result, $item) {
                                                     $result[] = $item[PR_ENTRYID];
                                                     return $result;
@@ -305,6 +311,24 @@ class Kopano extends SyncWorker {
 
         // get all the groups
         $groups = mapi_zarafa_getgrouplist($this->store, $ab_entryid);
+        $groupsUsers = array();
+        foreach ($groups as $groupDetails ) {
+            // All users are in group Everyone, so we don't have to get its members
+            if (strtoupper($groupDetails['groupname']) == 'EVERYONE') {
+                continue;
+            }
+            $groupentry = mapi_ab_openentry($addrbook, $groupDetails['groupid']);
+            $grouptable = @mapi_folder_getcontentstable($groupentry, MAPI_DEFERRED_ERRORS);
+            // some groups can not be listed - ZP-1196
+            if (mapi_last_hresult()) {
+                $this->Log(sprintf("Kopano->GetGAB(): Ignoring group '%s' as members can not be listed - possibly hidden, code: 0x%08X \n", $entry[PR_ACCOUNT], mapi_last_hresult() ));
+                continue;
+            }
+            $groupMembers = mapi_table_queryallrows($grouptable, array(PR_ACCOUNT));
+            if (!empty($groupMembers)) {
+                $groupsUsers[$groupDetails['groupname']] = $this->arrayFlatten($groupMembers, PR_ACCOUNT);
+            }
+        }
 
         // restrict the table if we should only return one
         if ($uniqueId) {
@@ -319,8 +343,9 @@ class Kopano extends SyncWorker {
                 $this->Terminate(sprintf("Kopano->getGAB(): Single GAB entry '%s' requested but %d entries found. Aborting.", $uniqueId, $querycnt));
             }
         }
+        $querycnt = mapi_table_getrowcount($table);
 
-        $gabentries = mapi_table_queryallrows($table, array(PR_ENTRYID,
+        $gabentries = mapi_table_queryrows($table, array(   PR_ENTRYID,
                                                             PR_ACCOUNT,
                                                             PR_DISPLAY_NAME,
                                                             PR_SMTP_ADDRESS,
@@ -331,6 +356,7 @@ class Kopano extends SyncWorker {
                                                             PR_HOME_TELEPHONE_NUMBER,
                                                             PR_TITLE, PR_COMPANY_NAME,
                                                             PR_OFFICE_LOCATION,
+                                                            PR_DEPARTMENT_NAME,
                                                             PR_BEEPER_TELEPHONE_NUMBER,
                                                             PR_PRIMARY_FAX_NUMBER,
                                                             PR_ORGANIZATIONAL_ID_NUMBER,
@@ -339,12 +365,17 @@ class Kopano extends SyncWorker {
                                                             PR_BUSINESS_ADDRESS_POSTAL_CODE,
                                                             PR_BUSINESS_ADDRESS_POST_OFFICE_BOX,
                                                             PR_BUSINESS_ADDRESS_STATE_OR_PROVINCE,
+                                                            PR_BUSINESS_ADDRESS_STREET,
                                                             PR_INITIALS,
                                                             PR_LANGUAGE,
                                                             PR_EMS_AB_THUMBNAIL_PHOTO,
                                                             PR_EC_AB_HIDDEN,
                                                             PR_DISPLAY_TYPE_EX
-                                                    ));
+                                           ), 0, $querycnt);
+        if(!is_array($gabentries)) {
+            $this->Log("Kopano->GetGAB(): GAB data can not be retrieved.");
+            return $data;
+        }
         foreach ($gabentries as $entry) {
             // do not add SYSTEM user to the GAB
             if (strtoupper($entry[PR_DISPLAY_NAME]) == "SYSTEM") {
@@ -355,14 +386,25 @@ class Kopano extends SyncWorker {
                 $this->Log(sprintf("Kopano->GetGAB(): Ignoring user '%s' as account is hidden", $entry[PR_ACCOUNT]));
                 continue;
             }
+            // ignore if user sync is disabled
+            if (isset($entry[PR_DISPLAY_TYPE_EX]) && $entry[PR_DISPLAY_TYPE_EX] == DT_MAILUSER) {
+                if (! (GAB_SYNC_TYPES & GAB_SYNC_USER)) {
+                    continue;
+                }
+            }
+            // ignore group Everyone if GAB_SYNC_HIDE_EVERYONE is true
+            if (GAB_SYNC_HIDE_EVERYONE && strtoupper($entry[PR_DISPLAY_NAME]) == "EVERYONE") {
+                $this->Log("Kopano->GetGAB(): Ignoring group Everyone.");
+                continue;
+            }
 
             $a = new GABEntry();
             $a->type = GABEntry::CONTACT;
-            $a->memberOf = array();
-            $memberOf = mapi_zarafa_getgrouplistofuser($this->store, $entry[PR_ENTRYID]);
-            if (is_array($memberOf)) {
-                $a->memberOf = array_keys($memberOf);
+            if (strtoupper($entry[PR_DISPLAY_NAME]) != "EVERYONE" && $entry[PR_DISPLAY_NAME] != $gabName) {
+                // Avoid loop because all other entries are members of Everyone group
+                $a->memberOf = $this->getMemberOf($groupsUsers, $entry[PR_ACCOUNT]);
             }
+
             // the company name is 'Everyone'
             if ($gabId != null && $entry[PR_DISPLAY_NAME] == $gabName) {
                 $entry[PR_ACCOUNT] = "Everyone";
@@ -370,9 +412,17 @@ class Kopano extends SyncWorker {
             }
             // is this a group?
             if (array_key_exists($entry[PR_ACCOUNT], $groups)) {
+                if (! (GAB_SYNC_TYPES & GAB_SYNC_GROUP)) {
+                    continue;
+                }
                 $a->type = GABEntry::GROUP;
                 $groupentry = mapi_ab_openentry($addrbook, $entry[PR_ENTRYID]);
-                $grouptable = mapi_folder_getcontentstable($groupentry, MAPI_DEFERRED_ERRORS);
+                $grouptable = @mapi_folder_getcontentstable($groupentry, MAPI_DEFERRED_ERRORS);
+                // some groups can not be listed - ZP-1196
+                if (mapi_last_hresult()) {
+                    $this->Log(sprintf("Kopano->GetGAB(): Ignoring group '%s' as members can not be listed - possibly hidden, code: 0x%08X \n", $entry[PR_ACCOUNT], mapi_last_hresult() ));
+                    continue;
+                }
                 $users = mapi_table_queryallrows($grouptable, array(PR_ENTRYID, PR_ACCOUNT, PR_SMTP_ADDRESS));
 
                 $a->members = array();
@@ -389,10 +439,22 @@ class Kopano extends SyncWorker {
                     }
                 }
             }
-            else if (isset($entry[PR_DISPLAY_TYPE_EX]) && $entry[PR_DISPLAY_TYPE_EX] == DT_ROOM) {
+            elseif (isset($entry[PR_DISPLAY_TYPE_EX]) && $entry[PR_DISPLAY_TYPE_EX] == DT_REMOTE_MAILUSER) {
+                if (! (GAB_SYNC_TYPES & GAB_SYNC_CONTACT)) {
+                    continue;
+                }
+                $a->type = GABEntry::CONTACT;
+            }
+            elseif (isset($entry[PR_DISPLAY_TYPE_EX]) && $entry[PR_DISPLAY_TYPE_EX] == DT_ROOM) {
+                if (! (GAB_SYNC_TYPES & GAB_SYNC_ROOM)) {
+                    continue;
+                }
                 $a->type = GABEntry::ROOM;
             }
-            else if (isset($entry[PR_DISPLAY_TYPE_EX]) && $entry[PR_DISPLAY_TYPE_EX] ==  DT_EQUIPMENT) {
+            elseif (isset($entry[PR_DISPLAY_TYPE_EX]) && $entry[PR_DISPLAY_TYPE_EX] == DT_EQUIPMENT) {
+                if (! (GAB_SYNC_TYPES & GAB_SYNC_EQUIPMENT)) {
+                    continue;
+                }
                 $a->type = GABEntry::EQUIPMENT;
             }
 
@@ -404,6 +466,7 @@ class Kopano extends SyncWorker {
             if (isset($entry[PR_TITLE]))                                $a->title                           = $entry[PR_TITLE];
             if (isset($entry[PR_COMPANY_NAME]))                         $a->companyName                     = $entry[PR_COMPANY_NAME];
             if (isset($entry[PR_OFFICE_LOCATION]))                      $a->officeLocation                  = $entry[PR_OFFICE_LOCATION];
+            if (isset($entry[PR_DEPARTMENT_NAME]))                      $a->department                      = $entry[PR_DEPARTMENT_NAME];
             if (isset($entry[PR_BUSINESS_TELEPHONE_NUMBER]))            $a->businessTelephoneNumber         = $entry[PR_BUSINESS_TELEPHONE_NUMBER];
             if (isset($entry[PR_MOBILE_TELEPHONE_NUMBER]))              $a->mobileTelephoneNumber           = $entry[PR_MOBILE_TELEPHONE_NUMBER];
             if (isset($entry[PR_HOME_TELEPHONE_NUMBER]))                $a->homeTelephoneNumber             = $entry[PR_HOME_TELEPHONE_NUMBER];
@@ -415,9 +478,11 @@ class Kopano extends SyncWorker {
             if (isset($entry[PR_BUSINESS_ADDRESS_POSTAL_CODE]))         $a->businessAddressPostalCode       = $entry[PR_BUSINESS_ADDRESS_POSTAL_CODE];
             if (isset($entry[PR_BUSINESS_ADDRESS_POST_OFFICE_BOX]))     $a->businessAddressPostOfficeBox    = $entry[PR_BUSINESS_ADDRESS_POST_OFFICE_BOX];
             if (isset($entry[PR_BUSINESS_ADDRESS_STATE_OR_PROVINCE]))   $a->businessAddressStateOrProvince  = $entry[PR_BUSINESS_ADDRESS_STATE_OR_PROVINCE];
+            if (isset($entry[PR_BUSINESS_ADDRESS_STREET]))              $a->businessAddressStreet           = $entry[PR_BUSINESS_ADDRESS_STREET];
             if (isset($entry[PR_INITIALS]))                             $a->initials                        = $entry[PR_INITIALS];
             if (isset($entry[PR_LANGUAGE]))                             $a->language                        = $entry[PR_LANGUAGE];
-            if (isset($entry[PR_EMS_AB_THUMBNAIL_PHOTO]))               $a->thumbnailPhoto                  = base64_encode($entry[PR_EMS_AB_THUMBNAIL_PHOTO]);
+            if (isset($entry[PR_EMS_AB_THUMBNAIL_PHOTO]) &&
+                strlen($entry[PR_EMS_AB_THUMBNAIL_PHOTO]) < 49152)      $a->thumbnailPhoto                  = base64_encode($entry[PR_EMS_AB_THUMBNAIL_PHOTO]);
 
             $data[] = $a;
         }
@@ -482,6 +547,19 @@ class Kopano extends SyncWorker {
             return false;
         }
         $chunkdata = $this->findChunk($store, $folderid, $chunkName);
+        // remove chunk if it's empty
+        if ($amountEntries == 0 && !empty($chunkdata)) {
+            $this->Log(sprintf("Kopano->setChunkData: %s - removing empty chunk", $chunkName));
+            $folder = $this->getFolder($store, $folderid);
+            mapi_folder_deletemessages($folder, array($chunkdata[PR_ENTRYID]), DELETE_HARD_DELETE);
+            if (mapi_last_hresult()) {
+                $this->Log("Kopano->setChunkData: error deleting empty chunk from the GAB folder: 0x%08X", mapi_last_hresult());
+            }
+            return true;
+        }
+        elseif ($amountEntries == 0) {
+            return true;
+        }
         $message = false;
 
         // message not found, create it
@@ -528,7 +606,7 @@ class Kopano extends SyncWorker {
         }
 
         // output log
-        $this->log($log);
+        $this->Log($log);
         return true;
     }
 
@@ -552,7 +630,7 @@ class Kopano extends SyncWorker {
         $folder = $this->getFolder($store, $folderid);
         $table = mapi_folder_getcontentstable($folder);
         if (!$table)
-            $this->Log(sprintf("Kopano->findChunk: Error, unable to read contents table to find chunk '%d': 0x%08X", $chunkId, mapi_last_hresult()));
+            $this->Log(sprintf("Kopano->findChunk: Error, unable to read contents table to find chunk '%s': 0x%08X", $chunkName, mapi_last_hresult()));
 
         $restriction = array(RES_PROPERTY, array(RELOP => RELOP_EQ, ULPROPTAG => PR_SUBJECT, VALUE => $chunkName));
         mapi_table_restrict($table, $restriction);
@@ -749,7 +827,7 @@ class Kopano extends SyncWorker {
             return "";
         }
         elseif ($ret) {
-            $this->Log("Kopano->readPropStream error opening stream: 0x%08X", $ret);
+            $this->Log(sprintf("Kopano->readPropStream error opening stream: 0x%08X", $ret));
             return "";
         }
         $data = "";
@@ -788,5 +866,56 @@ class Kopano extends SyncWorker {
             return false;
 
         return true;
+    }
+
+    /**
+     * Returns the array of groups in which the user is in.
+     *
+     * @param array     $groupsUsers    list of groups and their users
+     * @param string    $user           username
+     *
+     * @access private
+     * @return array
+     */
+    private function getMemberOf($groupsUsers, $user) {
+        // every user is in Everyone group
+        $groups = array('Everyone');
+        foreach ($groupsUsers as $group => $userDetails) {
+            if (in_array($user, $userDetails)) {
+                $groups[] = $group;
+
+                continue;
+            }
+        }
+        return $groups;
+    }
+
+    /**
+     * Flattens multi-dimensional array similar to array_column() function
+     * which is available since PHP 5.5.
+     *
+     * Input:
+     * Array (
+     *  [0] => Array([973078558] => entry0)
+     *  [1] => Array([973078558] => entry1)
+     *  [2] => Array([973078558] => entry2)
+     *  [3] => Array([973078558] => entry3)
+     *  [4] => Array([973078558] => entry4)
+     * )
+     * Result:
+     * Array (
+     *  [0] => entry0
+     *  [1] => entry1
+     *  [2] => entry2
+     *  [3] => entry3
+     *  [4] => entry4
+     * )
+     *
+     * @param unknown $array
+     * @param unknown $column_name
+     * @return array
+     */
+    private function arrayFlatten($array, $key) {
+        return array_map(function($element) use($key) {return $element[$key];}, $array);
     }
 }

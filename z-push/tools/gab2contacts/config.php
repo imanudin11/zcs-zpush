@@ -1,10 +1,10 @@
 <?php
 /***********************************************
 * File      :   config.php
-* Project   :   Z-Push - tools - GAB sync
+* Project   :   Z-Push - tools - GAB2Contacts
 * Descr     :   Configuration file.
 *
-* Created   :   28.01.2016
+* Created   :   20.07.2016
 *
 * Copyright 2016 Zarafa Deutschland GmbH
 *
@@ -26,14 +26,9 @@
 // The field to be hashed that is unique and never changes
 // in the entire lifetime of the GAB entry.
 define('HASHFIELD', 'account');
-define('AMOUNT_OF_CHUNKS', 10);
 
-// SyncWorker implementation to be used
-define('SYNCWORKER', 'Kopano');
-
-// Unique id to find a contact from the GAB (value to be supplied by -u on the command line)
-// Zarafa supports: 'account' and 'smtpAddress' (email)
-define('UNIQUEID', 'account');
+// ContactWorker implementation to be used
+define('CONTACTWORKER', 'Kopano');
 
 // Server connection settings
 // Depending on your setup, it might be advisable to change the lines below to one defined with your
@@ -57,33 +52,34 @@ define('PASSWORD', '');
 define('CERTIFICATE', null);
 define('CERTIFICATE_PASSWORD', null);
 
-// Store where the hidden folder is located.
-// For the public folder, use SYSTEM
-// to use another store, use the same as USERNAME
+// The GAB to be used. This only needs to be set on a multi-tenant system.
+// For standard installations, keep it at 'default'.
+define('SOURCE_GAB', 'default');
+
+// Store where the target contact folder is located.
+// For the public folder, use SYSTEM.
+// To use another store, use the same as USERNAME
 // or another store where USERNAME has full access to.
-define('HIDDEN_FOLDERSTORE', 'SYSTEM');
+define('CONTACT_FOLDERSTORE', 'SYSTEM');
 
-/// Do not change (unless you know exactly what you do)
-define('HIDDEN_FOLDERNAME', 'Z-Push-KOE-GAB');
+// Set the target FolderId.
+// You can find the id e.g. with the listfolders script of Kopano backend.
+define('CONTACT_FOLDERID', '');
 
-// Types of the objects to sync to GAB.
-define('GAB_SYNC_USER', 1);
-define('GAB_SYNC_CONTACT', 2);
-define('GAB_SYNC_GROUP', 4);
-define('GAB_SYNC_ROOM', 8);
-define('GAB_SYNC_EQUIPMENT', 16);
-
-define('GAB_SYNC_ALL', GAB_SYNC_USER | GAB_SYNC_CONTACT | GAB_SYNC_GROUP | GAB_SYNC_ROOM | GAB_SYNC_EQUIPMENT);
-
-// Set which items from GAB should be synced.
-// Default value is GAB_SYNC_ALL which syncs all items.
-// In order to sync only some specific types combine them with "|", e.g.
-// to sync only users and groups use:
-// define('GAB_SYNC_TYPES', GAB_SYNC_USER | GAB_SYNC_CONTACT);
-// In order to exclude specific types combine "& ~TYPE", e.g.
-// to sync all types except rooms and equipments use:
-// define('GAB_SYNC_TYPES', GAB_SYNC_ALL & ~GAB_SYNC_ROOM & ~GAB_SYNC_EQUIPMENT);
-define('GAB_SYNC_TYPES', GAB_SYNC_ALL);
-
-// Whether to hide the group Everyone in the synced GAB.
-define('GAB_SYNC_HIDE_EVERYONE', false);
+// Set the fileas (save as) order for contacts.
+// Possible values are:
+//   SYNC_FILEAS_FIRSTLAST    - fileas will be "Firstname Lastname"
+//   SYNC_FILEAS_LASTFIRST    - fileas will be "Lastname, Firstname"
+//   SYNC_FILEAS_COMPANYONLY  - fileas will be "Company"
+//   SYNC_FILEAS_COMPANYLAST  - fileas will be "Company (Lastname, Firstname)"
+//   SYNC_FILEAS_COMPANYFIRST - fileas will be "Company (Firstname Lastname)"
+//   SYNC_FILEAS_LASTCOMPANY  - fileas will be "Lastname, Firstname (Company)"
+//   SYNC_FILEAS_FIRSTCOMPANY - fileas will be "Firstname Lastname (Company)"
+//
+// The company-fileas will only be set if a contact has a company set. If one of
+// company-fileas is selected and a contact doesn't have a company set, it will default
+// to SYNC_FILEAS_FIRSTLAST or SYNC_FILEAS_LASTFIRST (depending on if last or first
+// option is selected for company).
+// If SYNC_FILEAS_COMPANYONLY is selected and company of the contact is not set
+// SYNC_FILEAS_LASTFIRST will be used
+define('FILEAS_ORDER', SYNC_FILEAS_LASTFIRST);
