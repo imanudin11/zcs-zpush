@@ -1,11 +1,11 @@
-==============  Z-Push Zimbra Backend - Release Notes - Release 69 ==============
+==============  Z-Push Zimbra Backend - Release Notes - Release 70 ==============
 
-THESE RELEASE NOTES ARE FOR RELEASE 69 CHANGES 
+THESE RELEASE NOTES ARE FOR RELEASE 70 CHANGES 
 
-**  RELEASE 69 is designed to work with Z-Push 2.4 or later **
+**  RELEASE 70 is designed to work with Z-Push 2.5 or later **
 
-PLEASE READ THESE RELEASE NOTES COMPLETELY BEFORE IMPLEMENTING RELEASE 69
-NOTE THAT THE RELEASE NOTES FOR 37-68 ARE ALSO CONTAINED BELOW AND SHOULD 
+PLEASE READ THESE RELEASE NOTES COMPLETELY BEFORE IMPLEMENTING RELEASE 70
+NOTE THAT THE RELEASE NOTES FOR 37-69 ARE ALSO CONTAINED BELOW AND SHOULD 
 ALSO BE READ FULLY WHEN UPGRADING FROM A RELEASE 48 OR EARLIER.
 THIS IS EXPECIALLY CRITICAL IF YOU ARE TURNING ON ANY OF THE NEW FEATURES
 AND ARE UPGRADING AN EXISTING INSTALLATION FROM RELEASE 48 OR EARLIER. 
@@ -74,6 +74,41 @@ to the final (contentParameters) parameter. The function headers should look lik
     public function MoveMessage($folderid, $id, $newfolderid, $contentParameters=false) {
     public function SetReadFlag($folderid, $id, $flags, $contentParameters=false) {
 Use a text editor to search for each of the functions in turn, and add the =false as shown.
+
+
+
+Changes Made To Revision 70: z-push-2 version ONLY
+ - Workaround Z-Push issue in SmartForward/SmartReply from shared folder
+ - Add 2 to continue statement in GetNextMessageBlock for Contacts
+ - Throw AuthenticationRequiredException for AUTH failures
+
+
+Workaround Z-Push issue in SmartForward/SmartReply from shared folder
+=====================================================================
+Z-Push has logic that splits the itemId on a ":" in SmartForward/SmartReply and only 
+returns the part after the ":" as the itemId. This is based on the fact that Exchange/
+Kopano use folderId:itemId as a long form identifer for an item, and the folderId is
+already being passed as a separate field. For zimbra this does not work if the item is
+from a shared folder, as the itemId from zimbra will be userGuid:itemId, and when they
+split the itemId and only return the latter part, this itemId no longer has any
+reference back to the owner. The workaround added is to check if the folderId is for a
+shared folder and, if it is, to extract the folder owner's userGuid from the folder 
+link and to prepend "<userGuid>:" to the itemId. Issue first reported at
+https://sourceforge.net/p/zimbrabackend/support-requests/181/
+
+
+Add 2 to continue statement in GetNextMessageBlock for Contacts
+===============================================================
+Add 2 to continue statement in GetNextMessageBlock for Contacts to correctly skip the 
+remainder of the loop, and to avoid generating warnings with PHP 7.3 and later. Issue
+first reported at https://sourceforge.net/p/zimbrabackend/bugs/90/
+
+
+Throw AuthenticationRequiredException for AUTH failures
+=======================================================
+Throw AuthenticationRequiredException for AUTH failures to allow clients to recognized
+the need to re-authenticate. Throwing this exception results in a HTTP 401 response
+being returned to the client. Prior to this it was returning a generic Server Error.
 
 
 

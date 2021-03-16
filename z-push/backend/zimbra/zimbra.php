@@ -1,8 +1,8 @@
 <?php
-$GLOBALS['revision'] = "69.2"; // Used to output the script version to the debug log
+$GLOBALS['revision'] = "70"; // Used to output the script version to the debug log
 /***********************************************
 * File          :   zimbra.php
-* Revision      :   69.2 (09-Mar-2021)
+* Revision      :   70 (13-Mar-2021)
 * Project       :   Z-Push Zimbra Backend
 *                   https://sourceforge.net/projects/zimbrabackend
 * Description   :   A backend for Z-Push to use with the Zimbra Collaboration Suite,

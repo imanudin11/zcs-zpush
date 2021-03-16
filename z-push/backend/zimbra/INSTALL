@@ -1,6 +1,6 @@
-==============  Z-Push-2 Zimbra Backend - Installation Notes - Release 69  ==============
+==============  Z-Push-2 Zimbra Backend - Installation Notes - Release 70  ==============
 
-**  RELEASE 69 is designed to work with Z-Push 2.5 or later  **
+**  RELEASE 70 is designed to work with Z-Push 2.5 or later  **
 
 Z-PUSH 2.5.x is now stable - but is still under development - There is still the possibility 
 that updates to Z-PUSH will break things in the ZIMBRA backend from time to time. Any
