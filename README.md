@@ -1,3 +1,5 @@
+Please see Exchange ActiveSync for Zimbra Open Source Edition article here : https://imanudin.net/2019/08/30/exchange-activesync-for-zimbra-open-source-edition/
+
 # zcs-zpush
 This repository is source for integrating Zimbra Single Server and Z-Push + Zimbra Backend to achieve ActiveSync on Zimbra OSE.
 
