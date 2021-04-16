@@ -44,6 +44,7 @@ class ZPush {
     const ASV_12 = "12.0";
     const ASV_121 = "12.1";
     const ASV_14 = "14.0";
+    const ASV_141 = "14.1";
 
     /**
      * Command codes for base64 encoded requests (AS >= 12.1)
@@ -95,7 +96,8 @@ class ZPush {
     static private $supportedASVersions = array(
                     self::ASV_12,
                     self::ASV_121,
-                    self::ASV_14
+                    self::ASV_14,
+                    self::ASV_141
                 );
 
     static private $supportedCommands = array(
@@ -145,7 +147,7 @@ class ZPush {
                                         self::CLASS_NAME => "SyncContact",
                                         self::CLASS_REQUIRESPROTOCOLVERSION => true,
                                         self::CLASS_DEFAULTTYPE => SYNC_FOLDER_TYPE_CONTACT,
-                                        self::CLASS_OTHERTYPES => array(SYNC_FOLDER_TYPE_USER_CONTACT),
+                                        self::CLASS_OTHERTYPES => array(SYNC_FOLDER_TYPE_USER_CONTACT, SYNC_FOLDER_TYPE_UNKNOWN),
                                    ),
                     "Calendar"  => array(
                                         self::CLASS_NAME => "SyncAppointment",
@@ -283,6 +285,52 @@ class ZPush {
                 throw new FatalMisconfigurationException(sprintf("Your policies' configuration file doesn't contain the required [default] section. Please check the '%s' file.", $policyfile));
             }
         }
+
+        if (defined('USE_X_FORWARDED_FOR_HEADER')) {
+            ZLog::Write(LOGLEVEL_INFO, "The configuration parameter 'USE_X_FORWARDED_FOR_HEADER' was deprecated in favor of 'USE_CUSTOM_REMOTE_IP_HEADER'. Please update your configuration.");
+        }
+
+        //check folder re-sync triggering settings
+        if(defined('DELETION_RATIO_THR') || defined('DELETION_COUNT_THR') || defined('DELETION_COUNT_LIMIT')){
+            if (!defined('DELETION_RATIO_THR')) {
+                throw new FatalMisconfigurationException("Please define DELETION_RATIO_THR.");
+            }
+            elseif (!defined('DELETION_COUNT_THR')) {
+                throw new FatalMisconfigurationException("Please define DELETION_COUNT_THR.");
+            }
+            elseif (!defined('DELETION_COUNT_LIMIT')) {
+                throw new FatalMisconfigurationException("Please define DELETION_COUNT_LIMIT.");
+            }
+            elseif (!is_numeric(DELETION_RATIO_THR) || DELETION_RATIO_THR <= 0) {
+                throw new FatalMisconfigurationException("The DELETION_RATIO_THR value must be a number higher than 0.");
+            }
+            elseif (!is_int(DELETION_COUNT_THR) || DELETION_COUNT_THR < 1) {
+                throw new FatalMisconfigurationException("The DELETION_COUNT_THR value must be a number higher than 0.");
+            }
+            elseif (!is_int(DELETION_COUNT_LIMIT) || DELETION_COUNT_LIMIT <= DELETION_COUNT_THR) {
+                throw new FatalMisconfigurationException("The DELETION_COUNT_LIMIT value must be a positive number higher than DELETION_COUNT_THR.");
+            }
+        }
+
+        //check retry loop settings when writing/reading file state machine data to disk
+        if ((defined('FILE_STATE_ATTEMPTS')) && (!is_int(FILE_STATE_ATTEMPTS) || FILE_STATE_ATTEMPTS < 1)) {
+            throw new FatalMisconfigurationException("The FILE_STATE_ATTEMPTS value must be a number higher than 0.");
+        }
+        if ((defined('FILE_STATE_SLEEP')) && (!is_int(FILE_STATE_SLEEP) || FILE_STATE_SLEEP < 1)) {
+            throw new FatalMisconfigurationException("The FILE_STATE_SLEEP value must be a number higher than 0.");
+        }
+        if (defined('FILE_STATE_WRITE_ATTEMPTS') || defined('FILE_STATE_WRITE_SLEEP')){
+            throw new FatalMisconfigurationException("The configuration parameter 'FILE_STATE_WRITE_ATTEMPTS' and 'FILE_STATE_WRITE_SLEEP' were deprecated in favor of 'FILE_STATE_ATTEMPTS' and 'FILE_STATE_SLEEP'. Please update your configuration.");
+        }
+
+        //check retry loop settings when writing file state machine data to disk
+        if ((defined('FILE_STATE_WRITE_ATTEMPTS')) && (!is_int(FILE_STATE_WRITE_ATTEMPTS) || FILE_STATE_WRITE_ATTEMPTS < 1)) {
+            throw new FatalMisconfigurationException("The FILE_STATE_WRITE_ATTEMPTS value must be a number higher than 0.");
+        }
+        if ((defined('FILE_STATE_WRITE_SLEEP')) && (!is_int(FILE_STATE_WRITE_SLEEP) || FILE_STATE_WRITE_SLEEP < 1)) {
+            throw new FatalMisconfigurationException("The FILE_STATE_WRITE_SLEEP value must be a number higher than 0.");
+        }
+
         return true;
     }
 
@@ -368,9 +416,7 @@ class ZPush {
         if (isset($additionalFolders) && !is_array($additionalFolders))
             ZLog::Write(LOGLEVEL_ERROR, "ZPush::CheckConfig() : The additional folders synchronization not available as array.");
         else {
-            self::$addSyncFolders = array();
-
-            // process configured data
+            // check configured data
             foreach ($additionalFolders as $af) {
 
                 if (!is_array($af) || !isset($af['store']) || !isset($af['folderid']) || !isset($af['name']) || !isset($af['type'])) {
@@ -387,21 +433,8 @@ class ZPush {
                     ZLog::Write(LOGLEVEL_ERROR, sprintf("ZPush::CheckConfig() : the type of the additional synchronization folder '%s is not permitted.", $af['name']));
                     continue;
                 }
-
-                $folder = new SyncFolder();
-
-                $folder->BackendId = $af['folderid'];
-                $folder->serverid = ZPush::GetDeviceManager(true)->GetFolderIdForBackendId($folder->BackendId, true, DeviceManager::FLD_ORIGIN_CONFIG, $af['name']);
-                $folder->parentid = 0;                  // only top folders are supported
-                $folder->displayname = $af['name'];
-                $folder->type = $af['type'];
-                // save store as custom property which is not streamed directly to the device
-                $folder->NoBackendFolder = true;
-                $folder->Store = $af['store'];
-
-                self::$addSyncFolders[$folder->BackendId] = $folder;
+                // the data will be inizialized when used via self::getAddFolders()
             }
-
         }
 
         ZLog::Write(LOGLEVEL_DEBUG, sprintf("Used timezone '%s'", date_default_timezone_get()));
@@ -473,6 +506,21 @@ class ZPush {
             ZPush::$deviceManager = new DeviceManager();
 
         return ZPush::$deviceManager;
+    }
+
+    /**
+     * Load another device in the DeviceManager and return it.
+     *
+     * @param ASDevice $asDevice
+     * @param boolean $initialize - default: true
+     * @return DeviceManager
+     */
+    static public function GetDeviceManagerWithDevice($asDevice, $initialize = true) {
+        $dm = ZPush::GetDeviceManager($initialize);
+        if ($dm) {
+            $dm->SetDevice($asDevice);
+        }
+        return $dm;
     }
 
     /**
@@ -603,7 +651,7 @@ class ZPush {
     static public function GetAdditionalSyncFolders($backendIdsAsKeys = true) {
         // get user based folders which should be synchronized
         $userFolder = self::GetDeviceManager()->GetAdditionalUserSyncFolders();
-        $addfolders = self::$addSyncFolders + $userFolder;
+        $addfolders = self::getAddSyncFolders() + $userFolder;
         // if requested, we rewrite the backendids to folderids here
         if ($backendIdsAsKeys === false && !empty($addfolders)) {
             ZLog::Write(LOGLEVEL_DEBUG, "ZPush::GetAdditionalSyncFolders(): Requested AS folderids as keys for additional folders array, converting");
@@ -628,11 +676,14 @@ class ZPush {
      * @return string
      */
     static public function GetAdditionalSyncFolderStore($backendid, $noDebug = false) {
-        if(isset(self::$addSyncFolders[$backendid]->Store)) {
-            $val = self::$addSyncFolders[$backendid]->Store;
+        if(isset(self::getAddSyncFolders()[$backendid]->Store)) {
+            $val = self::getAddSyncFolders()[$backendid]->Store;
         }
         else {
-            $val = self::GetDeviceManager()->GetAdditionalUserSyncFolderStore($backendid);
+            $val = self::GetDeviceManager()->GetAdditionalUserSyncFolder($backendid);
+            if (isset($val['store'])) {
+                $val = $val['store'];
+            }
         }
 
         if (!$noDebug)
@@ -658,6 +709,52 @@ class ZPush {
             return new $class(Request::GetProtocolVersion());
         else
             return new $class();
+    }
+
+    /**
+     * Initializes the SyncObjects for additional folders on demand.
+     * Uses DeviceManager->BuildSyncFolderObject() to do patching required for ZP-907.
+     *
+     * @access private
+     * @return array
+     */
+    static private function getAddSyncFolders() {
+        global $additionalFolders;
+        if (!isset(self::$addSyncFolders)) {
+            self::$addSyncFolders = array();
+
+            if (isset($additionalFolders) && !is_array($additionalFolders)) {
+                ZLog::Write(LOGLEVEL_ERROR, "ZPush::getAddSyncFolders() : The additional folders synchronization not available as array.");
+            }
+            else {
+                foreach ($additionalFolders as $af) {
+                    if (!is_array($af) || !isset($af['store']) || !isset($af['folderid']) || !isset($af['name']) || !isset($af['type'])) {
+                        ZLog::Write(LOGLEVEL_ERROR, "ZPush::getAddSyncFolders() : the additional folder synchronization is not configured correctly. Missing parameters. Entry will be ignored.");
+                        continue;
+                    }
+
+                    if ($af['store'] == "" || $af['folderid'] == "" || $af['name'] == "" || $af['type'] == "") {
+                        ZLog::Write(LOGLEVEL_WARN, "ZPush::getAddSyncFolders() : the additional folder synchronization is not configured correctly. Empty parameters. Entry will be ignored.");
+                        continue;
+                    }
+
+                    if (!in_array($af['type'], array(SYNC_FOLDER_TYPE_USER_NOTE, SYNC_FOLDER_TYPE_USER_CONTACT, SYNC_FOLDER_TYPE_USER_APPOINTMENT, SYNC_FOLDER_TYPE_USER_TASK, SYNC_FOLDER_TYPE_USER_MAIL))) {
+                        ZLog::Write(LOGLEVEL_ERROR, sprintf("ZPush::getAddSyncFolders() : the type of the additional synchronization folder '%s is not permitted.", $af['name']));
+                        continue;
+                    }
+
+                    // don't fail hard if no flags are set, but we at least warn about it
+                    if (!isset($af['flags'])) {
+                        ZLog::Write(LOGLEVEL_WARN, sprintf("ZPush::getAddSyncFolders() : the additional folder '%s' is not configured completely. Missing 'flags' parameter, defaulting to DeviceManager::FLD_FLAGS_NONE.", $af['name']));
+                        $af['flags'] = DeviceManager::FLD_FLAGS_NONE;
+                    }
+
+                    $folder = self::GetDeviceManager()->BuildSyncFolderObject($af['store'], $af['folderid'], '0', $af['name'], $af['type'], $af['flags'], DeviceManager::FLD_ORIGIN_CONFIG);
+                    self::$addSyncFolders[$folder->BackendId] = $folder;
+                }
+            }
+        }
+        return self::$addSyncFolders;
     }
 
     /**
@@ -706,7 +803,6 @@ class ZPush {
      */
     static public function PrintZPushLegal($message = "", $additionalMessage = "") {
         ZLog::Write(LOGLEVEL_DEBUG,"ZPush::PrintZPushLegal()");
-        $zpush_version = @constant('ZPUSH_VERSION');
 
         if ($message)
             $message = "<h3>". $message . "</h3>";
@@ -722,7 +818,6 @@ class ZPush {
         <body>
         <font face="verdana">
         <h2>Z-Push - Open Source ActiveSync</h2>
-        <b>Version $zpush_version</b><br>
         $message $additionalMessage
         <br><br>
         More information about Z-Push can be found at:<br>

@@ -27,7 +27,13 @@
 *************************************************/
 
 // config file
-require_once("backend/kopano/config.php");
+$config_path = stream_resolve_include_path(__DIR__."/config.php");
+if ($config_path !== false) {
+    require_once($config_path);
+}
+else {
+    ZLog::Write(LOGLEVEL_WARN, "Kopano backend config file can not be found");
+}
 
 // include PHP-MAPI classes
 include_once('backend/kopano/mapi/mapi.util.php');
@@ -55,6 +61,7 @@ class BackendKopano implements IBackend, ISearchProvider {
     private $wastebasket;
     private $addressbook;
     private $folderStatCache;
+    private $impersonateUser;
 
     // KC config parameter for PR_EC_ENABLED_FEATURES / PR_EC_DISABLED_FEATURES
     const MOBILE_ENABLED = 'mobile';
@@ -84,6 +91,7 @@ class BackendKopano implements IBackend, ISearchProvider {
         $this->wastebasket = false;
         $this->session = false;
         $this->folderStatCache = array();
+        $this->impersonateUser = false;
 
         ZLog::Write(LOGLEVEL_DEBUG, sprintf("BackendKopano using PHP-MAPI version: %s - PHP version: %s", phpversion("mapi"), phpversion()));
         KopanoChangesWrapper::SetBackend($this);
@@ -117,7 +125,7 @@ class BackendKopano implements IBackend, ISearchProvider {
      * @return string       AS version constant
      */
     public function GetSupportedASVersion() {
-        return ZPush::ASV_14;
+        return ZPush::ASV_141;
     }
 
     /**
@@ -133,7 +141,22 @@ class BackendKopano implements IBackend, ISearchProvider {
      */
     public function Logon($user, $domain, $pass) {
         ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Logon(): Trying to authenticate user '%s'..", $user));
+
         $this->mainUser = strtolower($user);
+        // TODO the impersonated user should be passed directly to IBackend->Logon() - ZP-1351
+        if (Request::GetImpersonatedUser()) {
+            $this->impersonateUser = strtolower(Request::GetImpersonatedUser());
+        }
+
+        // check if we are impersonating someone
+        // $defaultUser will be used for $this->defaultStore
+        if ($this->impersonateUser !== false) {
+            ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Logon(): Impersonation active - authenticating: '%s' - impersonating '%s'", $this->mainUser, $this->impersonateUser));
+            $defaultUser = $this->impersonateUser;
+        }
+        else {
+            $defaultUser = $this->mainUser;
+        }
 
         try {
             // check if notifications are available in php-mapi
@@ -142,16 +165,16 @@ class BackendKopano implements IBackend, ISearchProvider {
                 if (Utils::CheckMapiExtVersion('7.2.0')) {
                     $zpush_version = 'Z-Push_' . @constant('ZPUSH_VERSION');
                     $user_agent = (Request::GetDeviceID()) ? ZPush::GetDeviceManager()->GetUserAgent() : "unknown";
-                    $this->session = @mapi_logon_zarafa($user, $pass, MAPI_SERVER, null, null, 0, $zpush_version, $user_agent);
+                    $this->session = @mapi_logon_zarafa($this->mainUser, $pass, MAPI_SERVER, null, null, 0, $zpush_version, $user_agent);
                 }
                 else {
-                    $this->session = @mapi_logon_zarafa($user, $pass, MAPI_SERVER, null, null, 0);
+                    $this->session = @mapi_logon_zarafa($this->mainUser, $pass, MAPI_SERVER, null, null, 0);
                 }
                 $this->notifications = true;
             }
             // old fashioned session
             else {
-                $this->session = @mapi_logon_zarafa($user, $pass, MAPI_SERVER);
+                $this->session = @mapi_logon_zarafa($this->mainUser, $pass, MAPI_SERVER);
                 $this->notifications = false;
             }
 
@@ -166,7 +189,7 @@ class BackendKopano implements IBackend, ISearchProvider {
         }
 
         if(!$this->session) {
-            ZLog::Write(LOGLEVEL_WARN, sprintf("KopanoBackend->Logon(): logon failed for user '%s'", $user));
+            ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Logon(): logon failed for user '%s'", $this->mainUser));
             $this->defaultstore = false;
             return false;
         }
@@ -174,16 +197,22 @@ class BackendKopano implements IBackend, ISearchProvider {
         // Get/open default store
         $this->defaultstore = $this->openMessageStore($this->mainUser);
 
+        // To impersonate, we overwrite the defaultstore. We still need to open it before we can do that.
+        if ($this->impersonateUser) {
+            ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Logon(): Impersonating user '%s'", $defaultUser));
+            $this->defaultstore = $this->openMessageStore($defaultUser);
+        }
+
         if (mapi_last_hresult() == MAPI_E_FAILONEPROVIDER)
             throw new ServiceUnavailableException("Error connecting to KC (open store)");
 
         if($this->defaultstore === false)
-            throw new AuthenticationRequiredException(sprintf("KopanoBackend->Logon(): User '%s' has no default store", $user));
+            throw new AuthenticationRequiredException(sprintf("KopanoBackend->Logon(): User '%s' has no default store", $defaultUser));
 
         $this->store = $this->defaultstore;
-        $this->storeName = $this->mainUser;
+        $this->storeName = $defaultUser;
 
-        ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Logon(): User '%s' is authenticated",$user));
+        ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Logon(): User '%s' is authenticated%s", $this->mainUser, ($this->impersonateUser ? " impersonating '".$this->impersonateUser."'" : '')));
 
         $this->isZPushEnabled();
 
@@ -218,13 +247,19 @@ class BackendKopano implements IBackend, ISearchProvider {
         if (!isset($this->mainUser))
             return false;
 
+        $mainUser = $this->mainUser;
+        // when impersonating we need to check against the impersonated user
+        if ($this->impersonateUser) {
+            $mainUser = $this->impersonateUser;
+        }
+
         if ($user === false)
-            $user = $this->mainUser;
+            $user = $mainUser;
 
         // This is a special case. A user will get his entire folder structure by the foldersync by default.
         // The ACL check is executed when an additional folder is going to be sent to the mobile.
         // Configured that way the user could receive the same folderid twice, with two different names.
-        if ($this->mainUser == $user && $checkACLonly && $folderid) {
+        if ($mainUser == $user && $checkACLonly && $folderid && !$this->impersonateUser) {
             ZLog::Write(LOGLEVEL_DEBUG, "KopanoBackend->Setup(): Checking ACLs for folder of the users defaultstore. Fail is forced to avoid folder duplications on mobile.");
             return false;
         }
@@ -239,15 +274,25 @@ class BackendKopano implements IBackend, ISearchProvider {
                 // check for admin rights
                 if (!$folderid) {
                     if ($user != $this->mainUser) {
-                        $zarafauserinfo = @mapi_zarafa_getuser_by_name($this->defaultstore, $this->mainUser);
-                        $admin = (isset($zarafauserinfo['admin']) && $zarafauserinfo['admin'])?true:false;
+                        if ($this->impersonateUser) {
+                            $storeProps = mapi_getprops($userstore, array(PR_IPM_SUBTREE_ENTRYID));
+                            $rights = $this->HasSecretaryACLs($userstore, '', $storeProps[PR_IPM_SUBTREE_ENTRYID]);
+                            ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Setup(): Checking for secretary ACLs on root folder of impersonated store '%s': '%s'", $user, Utils::PrintAsString($rights)));
+                        }
+                        else {
+                            $zarafauserinfo = @mapi_zarafa_getuser_by_name($this->defaultstore, $this->mainUser);
+                            $rights = (isset($zarafauserinfo['admin']) && $zarafauserinfo['admin'])?true:false;
+                            ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Setup(): Checking for admin ACLs on store '%s': '%s'", $user, Utils::PrintAsString($rights)));
+                        }
                     }
                     // the user has always full access to his own store
-                    else
-                        $admin = true;
+                    else {
+                        $rights = true;
+                        ZLog::Write(LOGLEVEL_DEBUG, "KopanoBackend->Setup(): the user has always full access to his own store");
+                    }
 
-                    ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->Setup(): Checking for admin ACLs on store '%s': '%s'", $user, Utils::PrintAsString($admin)));
-                    return $admin;
+
+                    return $rights;
                 }
                 // check permissions on this folder
                 else {
@@ -302,7 +347,7 @@ class BackendKopano implements IBackend, ISearchProvider {
                 $calendar = mapi_msgstore_openentry($store, $entryid);
 
                 $pub = new FreeBusyPublish($this->session, $store, $calendar, $storeprops[PR_USER_ENTRYID]);
-                $pub->publishFB(time() - (7 * 24 * 60 * 60), 6 * 30 * 24 * 60 * 60); // publish from one week ago, 6 months ahead
+                $pub->publishFB(time() - (7 * 24 * 60 * 60), time() + (6 * 30 * 24 * 60 * 60)); // publish from one week ago, 6 months ahead
             }
         }
 
@@ -427,10 +472,14 @@ class BackendKopano implements IBackend, ISearchProvider {
             throw new StatusException("KopanoBackend->SendMail(): ZCP/KC version is too old, INETMAPI_IMTOMAPI is not available. Install at least ZCP version 7.0.6 or later.", SYNC_COMMONSTATUS_MAILSUBMISSIONFAILED, null, LOGLEVEL_FATAL);
             return false;
         }
+        $mimeLength = strlen($sm->mime);
         ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->SendMail(): RFC822: %d bytes  forward-id: '%s' reply-id: '%s' parent-id: '%s' SaveInSent: '%s' ReplaceMIME: '%s'",
-                                            strlen($sm->mime), Utils::PrintAsString($sm->forwardflag), Utils::PrintAsString($sm->replyflag),
+                                            $mimeLength, Utils::PrintAsString($sm->forwardflag), Utils::PrintAsString($sm->replyflag),
                                             Utils::PrintAsString((isset($sm->source->folderid) ? $sm->source->folderid : false)),
                                             Utils::PrintAsString(($sm->saveinsent)), Utils::PrintAsString(isset($sm->replacemime)) ));
+        if ($mimeLength == 0) {
+            throw new StatusException("KopanoBackend->SendMail(): empty mail data", SYNC_COMMONSTATUS_MAILSUBMISSIONFAILED);
+        }
 
         // Send-As functionality - https://jira.z-hub.io/browse/ZP-908
         $sendingAsSomeone = false;
@@ -438,23 +487,50 @@ class BackendKopano implements IBackend, ISearchProvider {
             $senderEmail = array();
             // KOE: grep for the Sender header indicating we should send-as
             // the 'X-Push-Sender-Name' header is not used
-            if (preg_match("/^X-Push-Sender:\s(.*?)$/im", $sm->mime, $senderEmail)) {
+            if (preg_match("/^X-Push-Sender:\s(.*?)$/im", substr($sm->mime, 0, strpos($sm->mime, "\r\n\r\n")), $senderEmail)) {
                 $sendAsEmail = trim($senderEmail[1]);
                 ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->SendMail(): Send-As '%s' requested by KOE", $sendAsEmail));
-                $sm->mime =  preg_replace("/^From: .*?$/im", "From: ". $sendAsEmail, $sm->mime, 1);
-                $sendingAsSomeone = true;
+
+                $originalFrom = array();
+                if (preg_match("/^(From:\s.*?)$/im", $sm->mime, $originalFrom)) {
+                    // find the occurence of the From header and replace it
+                    // preg_replace() uses additional 3x the length of $sm->mime to perform,
+                    // mb_ereg_replace() requires only 1x addtional memory, but replaces ALL occurences.
+                    // The below is different than concatenating in one line and also only uses 1x additional memory
+                    $fromPosition = strpos($sm->mime, $originalFrom[1]);
+                    $start = substr($sm->mime, 0, $fromPosition);
+                    $end = substr($sm->mime, $fromPosition + strlen($originalFrom[1]));
+                    $sm->mime = $start;
+                    $sm->mime .= "From: ". $sendAsEmail;
+                    $sm->mime .= $end;
+                    unset($start, $end);
+                    $sendingAsSomeone = true;
+                }
+                else {
+                    ZLog::Write(LOGLEVEL_DEBUG, "KopanoBackend->SendMail(): Could not find FROM header to replace for send-as");
+                }
             }
-            // serverside Send-As - shared folder with DeviceManager::FLD_FLAGS_REPLYASUSER flag
+            // serverside Send-As - shared folder with DeviceManager::FLD_FLAGS_SENDASOWNER flag
             elseif (isset($sm->source->folderid)) {
                 // get the owner of this folder - System is not allowed
                 $sharedUser = ZPush::GetAdditionalSyncFolderStore($sm->source->folderid);
                 if ($sharedUser != false && $sharedUser != 'SYSTEM') {
                     $folders = ZPush::GetAdditionalSyncFolders();
-                    if (isset($folders[$sm->source->folderid]) && ($folders[$sm->source->folderid]->Flags & DeviceManager::FLD_FLAGS_REPLYASUSER)) {
-                        $sendAs = $this->resolveRecipientGAL($sharedUser, 1);
-                        if (isset($sendAs[0])) {
-                            ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->SendMail(): Server side Send-As activated for shared folder. Sending as '%s'.", $sendAs[0]->emailaddress));
-                            $sm->mime =  preg_replace("/^From: .*?$/im", "From: ". $sendAs[0]->emailaddress, $sm->mime, 1);
+                    if (isset($folders[$sm->source->folderid]) && ($folders[$sm->source->folderid]->Flags & DeviceManager::FLD_FLAGS_SENDASOWNER)) {
+                        $sendAs = false;
+                        // for multi-company this is (mostly always) already an email address and we can just use it - ZP-1255
+                        if (Utils::CheckEmail($sharedUser)) {
+                            $sendAs = $sharedUser;
+                        }
+                        else {
+                            $gabResult = $this->resolveRecipientGAL($sharedUser, 1);
+                            if (isset($gabResult[0])) {
+                                $sendAs = $gabResult[0]->emailaddress;
+                            }
+                        }
+                        if ($sendAs) {
+                            ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->SendMail(): Server side Send-As activated for shared folder. Sending as '%s'.", $sendAs));
+                            $sm->mime =  preg_replace("/^From: .*?$/im", "From: ". $sendAs, $sm->mime, 1);
                             $sendingAsSomeone = true;
                         }
                     }
@@ -462,9 +538,12 @@ class BackendKopano implements IBackend, ISearchProvider {
             }
         }
 
-        // by splitting the message in several lines we can easily grep later
-        foreach(preg_split("/((\r)?\n)/", $sm->mime) as $rfc822line)
-            ZLog::Write(LOGLEVEL_WBXML, "RFC822: ". $rfc822line);
+        // When impersonating we are also "sendingAsSomeone". We also need to switch to the defaultstore
+        // to put the message in our own Outbox. Kopano will save a copy in the impersonated Sent Items folder.
+        if ($this->impersonateUser) {
+            $this->defaultstore = $this->openMessageStore($this->mainUser);
+            $sendingAsSomeone = true;
+        }
 
         $sendMailProps = MAPIMapping::GetSendMailProperties();
         $sendMailProps = getPropIdsFromStrings($this->defaultstore, $sendMailProps);
@@ -530,6 +609,21 @@ class BackendKopano implements IBackend, ISearchProvider {
             mapi_deleteprops($mapimessage,
                 array(  $sendMailProps["sentrepresentingname"], $sendMailProps["sentrepresentingemail"], $sendMailProps["representingentryid"],
                         $sendMailProps["sentrepresentingaddt"], $sendMailProps["sentrepresentinsrchk"]));
+            ZLog::Write(LOGLEVEL_DEBUG, "KopanoBackend->SendMail(): removing PR_SENT_REPRESENTING_* properties");
+        }
+
+        // Processing of KOE X-Push-Receipts header - delivery notification: ZP-1204
+        if (defined('KOE_CAPABILITY_RECEIPTS') && KOE_CAPABILITY_RECEIPTS) {
+            // KOE: grep for the Sender header indicating that there are TODOs
+            if (preg_match("/^X-Push-Receipts:\s(.*?)$/im", $sm->mime, $receiptsvalue)) {
+                $receipts = trim($receiptsvalue[1]);
+                ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->SendMail(): Receipts '%s' requested by KOE", $receipts));
+
+                // delivery notification requested
+                if (stripos($receipts, 'delivery') !== false) {
+                    $mapiprops[PR_ORIGINATOR_DELIVERY_REPORT_REQUESTED] = true;
+                }
+            }
         }
 
         if(isset($sm->source->itemid) && $sm->source->itemid) {
@@ -621,12 +715,20 @@ class BackendKopano implements IBackend, ISearchProvider {
         }
 
         mapi_setprops($mapimessage, $mapiprops);
-        mapi_message_savechanges($mapimessage);
+        mapi_savechanges($mapimessage);
         mapi_message_submitmessage($mapimessage);
         $hr = mapi_last_hresult();
 
-        if ($hr)
-            throw new StatusException(sprintf("KopanoBackend->SendMail(): Error saving/submitting the message to the Outbox: 0x%X", mapi_last_hresult()), SYNC_COMMONSTATUS_MAILSUBMISSIONFAILED);
+        if ($hr) {
+            switch ($hr) {
+                case MAPI_E_STORE_FULL:
+                    $code = SYNC_COMMONSTATUS_MAILBOXQUOTAEXCEEDED;
+                    break;
+                default:
+                    $code = SYNC_COMMONSTATUS_MAILSUBMISSIONFAILED;
+            }
+            throw new StatusException(sprintf("KopanoBackend->SendMail(): Error saving/submitting the message to the Outbox: 0x%X", $hr), $code);
+        }
 
         ZLog::Write(LOGLEVEL_DEBUG, "KopanoBackend->SendMail(): email submitted");
         return true;
@@ -678,7 +780,7 @@ class BackendKopano implements IBackend, ISearchProvider {
 
         $storeprops = mapi_getprops($this->defaultstore, array(PR_IPM_WASTEBASKET_ENTRYID));
         if (isset($storeprops[PR_IPM_WASTEBASKET_ENTRYID])) {
-            $wastebasket = mapi_msgstore_openentry($this->store, $storeprops[PR_IPM_WASTEBASKET_ENTRYID]);
+            $wastebasket = mapi_msgstore_openentry($this->defaultstore, $storeprops[PR_IPM_WASTEBASKET_ENTRYID]);
             $wastebasketprops = mapi_getprops($wastebasket, array(PR_SOURCE_KEY));
             if (isset($wastebasketprops[PR_SOURCE_KEY])) {
                 $this->wastebasket = bin2hex($wastebasketprops[PR_SOURCE_KEY]);
@@ -804,6 +906,43 @@ class BackendKopano implements IBackend, ISearchProvider {
         if(!$mapimessage)
             throw new StatusException(sprintf("BackendKopano->MeetingResponse('%s','%s', '%s'): Error, unable to open request message for response 0x%X", $requestid, $folderid, $response, mapi_last_hresult()), SYNC_MEETRESPSTATUS_INVALIDMEETREQ);
 
+        // ios sends calendar item in MeetingResponse
+        // @see https://jira.z-hub.io/browse/ZP-1524
+        $folderClass = ZPush::GetDeviceManager()->GetFolderClassFromCacheByID($fid);
+        // find the corresponding meeting request
+        if ($folderClass != 'Email') {
+            $props = MAPIMapping::GetMeetingRequestProperties();
+            $props = getPropIdsFromStrings($this->store, $props);
+
+            $messageprops = mapi_getprops($mapimessage, array($props["goidtag"]));
+            $goid = $messageprops[$props["goidtag"]];
+
+            $mapiprovider = new MAPIProvider($this->session, $this->store);
+            $inboxprops = $mapiprovider->GetInboxProps();
+            $folder = mapi_msgstore_openentry($this->store, $inboxprops[PR_ENTRYID]);
+
+            // Find the item by restricting all items to the correct ID
+            $restrict = array(RES_AND, array(
+                array(RES_PROPERTY,
+                    array(
+                        RELOP => RELOP_EQ,
+                        ULPROPTAG => $props["goidtag"],
+                        VALUE => $goid
+                    )
+                )
+            ));
+
+            $inboxcontents = mapi_folder_getcontentstable($folder);
+
+            $rows = mapi_table_queryallrows($inboxcontents, array(PR_ENTRYID), $restrict);
+            if (empty($rows)) {
+                throw new StatusException(sprintf("BackendKopano->MeetingResponse('%s','%s', '%s'): Error, meeting request not found in the inbox", $requestid, $folderid, $response), SYNC_MEETRESPSTATUS_INVALIDMEETREQ);
+            }
+            ZLog::Write(LOGLEVEL_DEBUG, "BackendKopano->MeetingResponse found meeting request in the inbox");
+            $mapimessage = mapi_msgstore_openentry($this->store, $rows[0][PR_ENTRYID]);
+            $reqentryid = $rows[0][PR_ENTRYID];
+        }
+
         $meetingrequest = new Meetingrequest($this->store, $mapimessage, $this->session);
 
         if(!$meetingrequest->isMeetingRequest())
@@ -813,14 +952,26 @@ class BackendKopano implements IBackend, ISearchProvider {
             throw new StatusException(sprintf("BackendKopano->MeetingResponse('%s','%s', '%s'): Error, attempt to response to meeting request that we organized", $requestid, $folderid, $response), SYNC_MEETRESPSTATUS_INVALIDMEETREQ);
 
         // Process the meeting response. We don't have to send the actual meeting response
-        // e-mail, because the device will send it itself.
+        // e-mail, because the device will send it itself. This seems not to be the case
+        // anymore for the ios devices since at least version 12.4. Z-Push will send the
+        // accepted email in such a case.
+        // @see https://jira.z-hub.io/browse/ZP-1524
+        $sendresponse = false;
+        $deviceType = strtolower(Request::GetDeviceType());
+        if ($deviceType == 'iphone' || $deviceType == 'ipad' || $deviceType == 'ipod') {
+            $matches = array();
+            if (preg_match("/^Apple-.*?\/(\d{4})\./", Request::GetUserAgent(), $matches) && isset($matches[1]) && $matches[1] >= 1607) {
+                ZLog::Write(LOGLEVEL_DEBUG, sprintf("BackendKopano->MeetingResponse: iOS device %s->%s", Request::GetDeviceType(), Request::GetUserAgent()));
+                $sendresponse = true;
+            }
+        }
         switch($response) {
             case 1:     // accept
             default:
-                $entryid = $meetingrequest->doAccept(false, false, false, false, false, false, true); // last true is the $userAction
+                $entryid = $meetingrequest->doAccept(false, $sendresponse, false, false, false, false, true); // last true is the $userAction
                 break;
             case 2:        // tentative
-                $entryid = $meetingrequest->doAccept(true, false, false, false, false, false, true); // last true is the $userAction
+                $entryid = $meetingrequest->doAccept(true, $sendresponse, false, false, false, false, true); // last true is the $userAction
                 break;
             case 3:        // decline
                 $meetingrequest->doDecline(false);
@@ -848,11 +999,13 @@ class BackendKopano implements IBackend, ISearchProvider {
         if ($requestid == $calendarid) {
             ZLog::Write(LOGLEVEL_DEBUG, sprintf("BackendKopano->MeetingResponse('%s','%s', '%s'): returned calender id is the same as the requestid - re-searching", $requestid, $folderid, $response));
 
-            $props = MAPIMapping::GetMeetingRequestProperties();
-            $props = getPropIdsFromStrings($this->store, $props);
+            if (empty($props)) {
+                $props = MAPIMapping::GetMeetingRequestProperties();
+                $props = getPropIdsFromStrings($this->store, $props);
 
-            $messageprops = mapi_getprops($mapimessage, Array($props["goidtag"]));
-            $goid = $messageprops[$props["goidtag"]];
+                $messageprops = mapi_getprops($mapimessage, Array($props["goidtag"]));
+                $goid = $messageprops[$props["goidtag"]];
+            }
 
             $items = $meetingrequest->findCalendarItems($goid);
 
@@ -869,8 +1022,10 @@ class BackendKopano implements IBackend, ISearchProvider {
         }
 
         // delete meeting request from Inbox
-        $folderentryid = mapi_msgstore_entryidfromsourcekey($this->store, hex2bin($folderid));
-        $folder = mapi_msgstore_openentry($this->store, $folderentryid);
+        if ($folderClass == 'Email') {
+            $folderentryid = mapi_msgstore_entryidfromsourcekey($this->store, hex2bin($folderid));
+            $folder = mapi_msgstore_openentry($this->store, $folderentryid);
+        }
         mapi_folder_deletemessages($folder, array($reqentryid), 0);
 
         $prefix = '';
@@ -992,9 +1147,9 @@ class BackendKopano implements IBackend, ISearchProvider {
     }
 
     /**
-     * Applies settings to and gets informations from the device
+     * Applies settings to and gets informations from the device.
      *
-     * @param SyncObject        $settings (SyncOOF or SyncUserInformation possible)
+     * @param SyncObject    $settings (SyncOOF, SyncUserInformation, SyncRightsManagementTemplates possible)
      *
      * @access public
      * @return SyncObject       $settings
@@ -1006,6 +1161,10 @@ class BackendKopano implements IBackend, ISearchProvider {
 
         if ($settings instanceof SyncUserInformation) {
             $this->settingsUserInformation($settings);
+        }
+
+        if ($settings instanceof SyncRightsManagementTemplates) {
+            $this->settingsRightsManagementTemplates($settings);
         }
 
         return $settings;
@@ -1043,7 +1202,8 @@ class BackendKopano implements IBackend, ISearchProvider {
                 $response->to = $to;
                 $response->status = SYNC_RESOLVERECIPSSTATUS_SUCCESS;
 
-                $recipient = $this->resolveRecipient($to, $maxAmbiguousRecipients);
+                // do not expand distlists here
+                $recipient = $this->resolveRecipient($to, $maxAmbiguousRecipients, false);
                 if (is_array($recipient) && !empty($recipient)) {
                     $response->recipientcount = 0;
                     foreach ($recipient as $entry) {
@@ -1143,14 +1303,15 @@ class BackendKopano implements IBackend, ISearchProvider {
      * Searches the GAB of Kopano
      * Can be overwitten globally by configuring a SearchBackend
      *
-     * @param string        $searchquery
-     * @param string        $searchrange
+     * @param string                        $searchquery        string to be searched for
+     * @param string                        $searchrange        specified searchrange
+     * @param SyncResolveRecipientsPicture  $searchpicture      limitations for picture
      *
      * @access public
-     * @return array
+     * @return array        search results
      * @throws StatusException
      */
-    public function GetGALSearchResults($searchquery, $searchrange){
+    public function GetGALSearchResults($searchquery, $searchrange, $searchpicture) {
         // only return users whose displayName or the username starts with $name
         //TODO: use PR_ANR for this restriction instead of PR_DISPLAY_NAME and PR_ACCOUNT
         $addrbook = $this->getAddressbook();
@@ -1189,7 +1350,7 @@ class BackendKopano implements IBackend, ISearchProvider {
         $querylimit = (($rangeend + 1) < $querycnt) ? ($rangeend + 1) : $querycnt;
 
         if ($querycnt > 0)
-            $abentries = mapi_table_queryrows($table, array(PR_ACCOUNT, PR_DISPLAY_NAME, PR_SMTP_ADDRESS, PR_BUSINESS_TELEPHONE_NUMBER, PR_GIVEN_NAME, PR_SURNAME, PR_MOBILE_TELEPHONE_NUMBER, PR_HOME_TELEPHONE_NUMBER, PR_TITLE, PR_COMPANY_NAME, PR_OFFICE_LOCATION), $rangestart, $querylimit);
+            $abentries = mapi_table_queryrows($table, array(PR_ENTRYID, PR_ACCOUNT, PR_DISPLAY_NAME, PR_SMTP_ADDRESS, PR_BUSINESS_TELEPHONE_NUMBER, PR_GIVEN_NAME, PR_SURNAME, PR_MOBILE_TELEPHONE_NUMBER, PR_HOME_TELEPHONE_NUMBER, PR_TITLE, PR_COMPANY_NAME, PR_OFFICE_LOCATION, PR_EMS_AB_THUMBNAIL_PHOTO), $rangestart, $querylimit);
 
         for ($i = 0; $i < $querylimit; $i++) {
             if (!isset($abentries[$i][PR_SMTP_ADDRESS])) {
@@ -1234,6 +1395,10 @@ class BackendKopano implements IBackend, ISearchProvider {
 
             if (isset($abentries[$i][PR_OFFICE_LOCATION]))
                 $items[$i][SYNC_GAL_OFFICE] = w2u($abentries[$i][PR_OFFICE_LOCATION]);
+
+            if ($searchpicture !== false && isset($abentries[$i][PR_EMS_AB_THUMBNAIL_PHOTO])) {
+                $items[$i][SYNC_GAL_PICTURE] = StringStreamWrapper::Open($abentries[$i][PR_EMS_AB_THUMBNAIL_PHOTO]);
+            }
         }
         $nrResults = count($items);
         $items['range'] = ($nrResults > 0) ? $rangestart.'-'.($nrResults - 1) : '0-0';
@@ -1408,6 +1573,26 @@ class BackendKopano implements IBackend, ISearchProvider {
     }
 
     /**
+     * Returns the impersonated user name.
+     *
+     * @access public
+     * @return string or false if no user is impersonated
+     */
+    public function GetImpersonatedUser() {
+        return $this->impersonateUser;
+    }
+
+    /**
+     * Returns the authenticated user name.
+     *
+     * @access public
+     * @return string
+     */
+    public function GetMainUser() {
+        return $this->mainUser;
+    }
+
+    /**
      * Indicates if the Backend supports folder statistics.
      *
      * @access public
@@ -1432,6 +1617,9 @@ class BackendKopano implements IBackend, ISearchProvider {
         list($user, $domain) = Utils::SplitDomainUser($store);
         if ($user === false) {
             $user = $this->mainUser;
+            if ($this->impersonateUser) {
+                $user = $this->impersonateUser;
+            }
         }
 
         // if there is a ReplyBackImExporter, the exporter needs to run!
@@ -1474,6 +1662,90 @@ class BackendKopano implements IBackend, ISearchProvider {
             // a timestamp that changes once per hour is returned in case there is no data found for this folder. It will be synchronized only once per hour.
             return gmdate("Y-m-d-H");
         }
+    }
+
+    /**
+     * Returns a KoeSignatures object.
+     *
+     * @access public
+     * @return KoeSignatures
+     */
+    public function GetKoeSignatures() {
+        $sigs = new KoeSignatures();
+        $storeProps = mapi_getprops($this->store, array(PR_EC_WEBACCESS_SETTINGS_JSON));
+
+        // Check if property exists, if it doesn't exist then we can continue with an empty signature object
+        if (isset($storeProps[PR_EC_WEBACCESS_SETTINGS_JSON]) || MAPIUtils::GetError(PR_EC_WEBACCESS_SETTINGS_JSON, $storeProps) == MAPI_E_NOT_ENOUGH_MEMORY) {
+            $settings_string = MAPIUtils::readPropStream($this->store, PR_EC_WEBACCESS_SETTINGS_JSON);
+            if(!empty($settings_string)) {
+                $settings = json_decode($settings_string, true);
+                if (json_last_error()) {
+                    ZLog::Write(LOGLEVEL_WARN, sprintf("KopanoBackend->GetKoeSignatures(): Error decoding JSON WebApp settings: %s", json_last_error()));
+                }
+                if (isset($settings['settings']['zarafa']['v1']['contexts']['mail']['signatures'])) {
+                    // convert WebApp signatures into KoeSignatures object
+                    $sigs->LoadSignaturesFromData($settings['settings']['zarafa']['v1']['contexts']['mail']['signatures']);
+                    ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->GetKoeSignatures(): Found %d signatures - new '%s' - reply/fw: '%s' - hash: %s", count($sigs->GetSignatures()), $sigs->GetNewMessageSignatureId(), $sigs->GetReplyForwardSignatureId(), $sigs->GetHash()));
+                }
+                else {
+                    ZLog::Write(LOGLEVEL_DEBUG, "KopanoBackend->GetKoeSignatures(): No signature data in WebApp settings");
+                }
+            }
+        }
+        return $sigs;
+    }
+
+    /**
+     * Returns information about the user's store:
+     * number of folders, store size, full name, email address.
+     *
+     * @access public
+     * @return UserStoreInfo
+     */
+    public function GetUserStoreInfo() {
+        $userStoreInfo = new UserStoreInfo();
+
+        $rootfolder = mapi_msgstore_openentry($this->store);
+        $hierarchy =  mapi_folder_gethierarchytable($rootfolder, CONVENIENT_DEPTH);
+        // Do not take hidden and system folders into account
+        // TODO make this restriction generic and use for hierarchy?
+        $restrict = array(RES_AND, array(
+                            array(  RES_PROPERTY,
+                                array(  RELOP => RELOP_NE,
+                                        ULPROPTAG => PR_ATTR_HIDDEN,
+                                        VALUE => true),
+                            ),
+                            array(  RES_PROPERTY,
+                                array(  RELOP => RELOP_EQ,
+                                        ULPROPTAG => PR_FOLDER_TYPE,
+                                        VALUE => FOLDER_GENERIC),
+                            ),
+                            array(  RES_EXIST,
+                                array(  ULPROPTAG => PR_CONTAINER_CLASS),
+                            ),
+                        ));
+        mapi_table_restrict($hierarchy, $restrict);
+        $foldercount = mapi_table_getrowcount($hierarchy);
+
+        $storeProps = mapi_getprops($this->store, array(PR_MESSAGE_SIZE_EXTENDED));
+
+        // Disable the sending of the storesize parameter to KOE.
+        // In case this parameter is greater than 0 then KOE will reduce the synched data window basing on thresholds and
+        // displays a dialog message.
+        if (defined('DISABLE_KOE_STORESIZE_LIMIT') && DISABLE_KOE_STORESIZE_LIMIT === true) {
+            ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->GetUserStoreInfo(): KOE storesize limit handling is DISABLED."));
+            $storesize = 0;
+        }
+        else {
+            $storesize = isset($storeProps[PR_MESSAGE_SIZE_EXTENDED]) ? $storeProps[PR_MESSAGE_SIZE_EXTENDED] : 0;
+        }
+
+        $userDetails = $this->GetUserDetails($this->impersonateUser ?: $this->mainUser);
+        $userStoreInfo->SetData($foldercount, $storesize, $userDetails['fullname'], $userDetails['emailaddress']);
+        ZLog::Write(LOGLEVEL_DEBUG, sprintf("KopanoBackend->GetUserStoreInfo(): user %s (%s) store size is %d bytes and contains %d folders",
+                Utils::PrintAsString($userDetails['fullname']), Utils::PrintAsString($userDetails['emailaddress']), $storesize, $foldercount));
+
+        return $userStoreInfo;
     }
 
     /**----------------------------------------------------------------------------------------------------------
@@ -1594,11 +1866,13 @@ class BackendKopano implements IBackend, ISearchProvider {
      * @access public
      * @return boolean
      */
-    public function HasSecretaryACLs($store, $folderid) {
-        $entryid = mapi_msgstore_entryidfromsourcekey($store, hex2bin($folderid));
+    public function HasSecretaryACLs($store, $folderid, $entryid = false) {
         if (!$entryid) {
-            ZLog::Write(LOGLEVEL_WARN, sprintf("KopanoBackend->HasSecretaryACLs(): error, no entryid resolved for %s on store %s", $folderid, $store));
-            return false;
+            $entryid = mapi_msgstore_entryidfromsourcekey($store, hex2bin($folderid));
+            if (!$entryid) {
+                ZLog::Write(LOGLEVEL_WARN, sprintf("KopanoBackend->HasSecretaryACLs(): error, no entryid resolved for %s on store %s", $folderid, $store));
+                return false;
+            }
         }
 
         $folder = mapi_msgstore_openentry($store, $entryid);
@@ -1693,8 +1967,17 @@ class BackendKopano implements IBackend, ISearchProvider {
             $oof->oofmessage[] = $oofmessage;
 
             // check whether time based out of office is set
-            if ($oof->oofstate == SYNC_SETTINGSOOF_GLOBAL && isset($oofprops[PR_EC_OUTOFOFFICE_FROM]) && isset($oofprops[PR_EC_OUTOFOFFICE_UNTIL])) {
-                if ($oofprops[PR_EC_OUTOFOFFICE_FROM] < $oofprops[PR_EC_OUTOFOFFICE_UNTIL]) {
+            if ($oof->oofstate == SYNC_SETTINGSOOF_GLOBAL && isset($oofprops[PR_EC_OUTOFOFFICE_FROM], $oofprops[PR_EC_OUTOFOFFICE_UNTIL])) {
+                $now = time();
+                if ($now > $oofprops[PR_EC_OUTOFOFFICE_FROM] && $now > $oofprops[PR_EC_OUTOFOFFICE_UNTIL]) {
+                    // Out of office is set but the date is in the past. Set the state to disabled.
+                    // @see https://jira.z-hub.io/browse/ZP-1188 for details
+                    $oof->oofstate = SYNC_SETTINGSOOF_DISABLED;
+                    @mapi_setprops($this->defaultstore, array(PR_EC_OUTOFOFFICE => false));
+                    @mapi_deleteprops($this->defaultstore, array(PR_EC_OUTOFOFFICE_FROM, PR_EC_OUTOFOFFICE_UNTIL));
+                    ZLog::Write(LOGLEVEL_INFO, "BackendKopano->settingsOofGet(): Out of office is set but the from and until are in the past. Disabling out of office.");
+                }
+                elseif ($oofprops[PR_EC_OUTOFOFFICE_FROM] < $oofprops[PR_EC_OUTOFOFFICE_UNTIL]) {
                     $oof->oofstate = SYNC_SETTINGSOOF_TIMEBASED;
                     $oof->starttime = $oofprops[PR_EC_OUTOFOFFICE_FROM];
                     $oof->endtime = $oofprops[PR_EC_OUTOFOFFICE_UNTIL];
@@ -1786,14 +2069,48 @@ class BackendKopano implements IBackend, ISearchProvider {
             ZLog::Write(LOGLEVEL_ERROR, "The store or user are not available for getting user information");
             return false;
         }
-        $user = mapi_zarafa_getuser($this->defaultstore, $this->mainUser);
+        $user = mapi_zarafa_getuser_by_name($this->defaultstore, $this->mainUser);
         if ($user != false) {
             $userinformation->Status = SYNC_SETTINGSSTATUS_USERINFO_SUCCESS;
-            $userinformation->emailaddresses[] = $user["emailaddress"];
+            if (Request::GetProtocolVersion() >= 14.1) {
+                $account = new SyncAccount();
+                $emailaddresses = new SyncEmailAddresses();
+                $emailaddresses->smtpaddress[] = $user["emailaddress"];
+                $emailaddresses->primarysmtpaddress = $user["emailaddress"];
+                $account->emailaddresses = $emailaddresses;
+                $userinformation->accounts[] = $account;
+            }
+            else {
+                $userinformation->emailaddresses[] = $user["emailaddress"];
+            }
             return true;
         }
-        ZLog::Write(LOGLEVEL_ERROR, sprintf("Getting user information failed: mapi_zarafa_getuser(%X)", mapi_last_hresult()));
+        ZLog::Write(LOGLEVEL_ERROR, sprintf("Getting user information failed: mapi_zarafa_getuser_by_name(%X)", mapi_last_hresult()));
         return false;
+    }
+
+    /**
+     * Gets the rights management templates from the server.
+     *
+     * @param SyncObject $rmTemplates
+     *
+     * @access private
+     * @return void
+     */
+    private function settingsRightsManagementTemplates(&$rmTemplates) {
+        /* Currently there is no information rights management feature in
+         * Kopano backend, so just return the status and empty
+         * SyncRightsManagementTemplates tag.
+         * Once it's available, it would be something like:
+
+        $rmTemplate = new SyncRightsManagementTemplate();
+        $rmTemplate->id = "some-template-id-eg-guid";
+        $rmTemplate->name = "Template name";
+        $rmTemplate->description = "What does the template do. E.g. it disables forward and reply.";
+        $rmTemplates->rmtemplates[] = $rmTemplate;
+         */
+        $rmTemplates->Status = SYNC_COMMONSTATUS_IRMFEATUREDISABLED;
+        $rmTemplates->rmtemplates = array();
     }
 
     /**
@@ -1982,11 +2299,12 @@ class BackendKopano implements IBackend, ISearchProvider {
      *
      * @param string $to
      * @param int $maxAmbiguousRecipients
+     * @param boolean $expandDistlist
      *
      * @return SyncResolveRecipient|boolean
      */
-    private function resolveRecipient($to, $maxAmbiguousRecipients) {
-        $recipient = $this->resolveRecipientGAL($to, $maxAmbiguousRecipients);
+    private function resolveRecipient($to, $maxAmbiguousRecipients, $expandDistlist = true) {
+        $recipient = $this->resolveRecipientGAL($to, $maxAmbiguousRecipients, $expandDistlist);
 
         if ($recipient !== false) {
             return $recipient;
@@ -2006,10 +2324,11 @@ class BackendKopano implements IBackend, ISearchProvider {
      *
      * @param string $to
      * @param int $maxAmbiguousRecipients
+     * @param boolean $expandDistlist
      * @return array|boolean
      */
-    private function resolveRecipientGAL($to, $maxAmbiguousRecipients) {
-        ZLog::Write(LOGLEVEL_WBXML, sprintf("Resolving recipient '%s' in GAL", $to));
+    private function resolveRecipientGAL($to, $maxAmbiguousRecipients, $expandDistlist = true) {
+        ZLog::Write(LOGLEVEL_WBXML, sprintf("Kopano->resolveRecipientGAL(): Resolving recipient '%s' in GAL", $to));
         $addrbook = $this->getAddressbook();
         // FIXME: create a function to get the adressbook contentstable
         $ab_entryid = mapi_ab_getdefaultdir($addrbook);
@@ -2019,7 +2338,7 @@ class BackendKopano implements IBackend, ISearchProvider {
             $table = mapi_folder_getcontentstable($ab_dir);
 
         if (!$table) {
-            ZLog::Write(LOGLEVEL_WARN, sprintf("Unable to open addressbook:0x%X", mapi_last_hresult()));
+            ZLog::Write(LOGLEVEL_WARN, sprintf("Kopano->resolveRecipientGAL(): Unable to open addressbook:0x%X", mapi_last_hresult()));
             return false;
         }
 
@@ -2035,33 +2354,46 @@ class BackendKopano implements IBackend, ISearchProvider {
                 $rowsToQuery = 1;
             }
             elseif ($querycnt > 1 && $maxAmbiguousRecipients == 0) {
-                ZLog::Write(LOGLEVEL_INFO, sprintf("GAL search found %d recipients but the device hasn't requested ambiguous recipients", $querycnt));
+                ZLog::Write(LOGLEVEL_INFO, sprintf("Kopano->resolveRecipientGAL(): GAL search found %d recipients but the device hasn't requested ambiguous recipients", $querycnt));
                 return $recipientGal;
             }
+            elseif ($querycnt > 1 && $maxAmbiguousRecipients == 1) {
+                $rowsToQuery = $querycnt;
+            }
             // get the certificate every time because caching the certificate is less expensive than opening addressbook entry again
-            $abentries = mapi_table_queryrows($table, array(PR_ENTRYID, PR_DISPLAY_NAME, PR_EMS_AB_TAGGED_X509_CERT, PR_OBJECT_TYPE), 0, $rowsToQuery);
+            $abentries = mapi_table_queryrows($table, array(PR_ENTRYID, PR_DISPLAY_NAME, PR_EMS_AB_TAGGED_X509_CERT, PR_OBJECT_TYPE, PR_SMTP_ADDRESS), 0, $rowsToQuery);
             for ($i = 0, $nrEntries = count($abentries); $i < $nrEntries; $i++) {
+                if (strcasecmp($abentries[$i][PR_SMTP_ADDRESS], $to) !== 0 && $maxAmbiguousRecipients == 1) {
+                    ZLog::Write(LOGLEVEL_INFO, sprintf("Kopano->resolveRecipientGAL(): maxAmbiguousRecipients is 1 and found non-matching user (to '%s' found: '%s')", $to, $abentries[$i][PR_SMTP_ADDRESS]));
+                    continue;
+                }
                 if ($abentries[$i][PR_OBJECT_TYPE] == MAPI_DISTLIST) {
-                    // dist lists must be expanded into their members
-                    ZLog::Write(LOGLEVEL_DEBUG, sprintf("'%s' is a dist list. Expand it to members.", $to));
-                    $distList = mapi_ab_openentry($addrbook, $abentries[$i][PR_ENTRYID]);
-                    $distListContent = mapi_folder_getcontentstable($distList);
-                    $distListMembers = mapi_table_queryallrows($distListContent, array(PR_ENTRYID, PR_DISPLAY_NAME, PR_EMS_AB_TAGGED_X509_CERT));
-                    for ($j = 0, $nrDistListMembers = mapi_table_getrowcount($distListContent); $j < $nrDistListMembers; $j++) {
-                        ZLog::Write(LOGLEVEL_WBXML, sprintf("distlist's '%s' member", $to, $distListMembers[$j][PR_DISPLAY_NAME]));
-                        $recipientGal[] = $this->createResolveRecipient(SYNC_RESOLVERECIPIENTS_TYPE_GAL, $to, $distListMembers[$j], $nrDistListMembers);
+                    // check whether to expand dist list
+                    if ($expandDistlist) {
+                        ZLog::Write(LOGLEVEL_DEBUG, sprintf("Kopano->resolveRecipientGAL(): '%s' is a dist list. Expand it to members.", $to));
+                        $distList = mapi_ab_openentry($addrbook, $abentries[$i][PR_ENTRYID]);
+                        $distListContent = mapi_folder_getcontentstable($distList);
+                        $distListMembers = mapi_table_queryallrows($distListContent, array(PR_ENTRYID, PR_DISPLAY_NAME, PR_EMS_AB_TAGGED_X509_CERT));
+                        for ($j = 0, $nrDistListMembers = mapi_table_getrowcount($distListContent); $j < $nrDistListMembers; $j++) {
+                            ZLog::Write(LOGLEVEL_WBXML, sprintf("Kopano->resolveRecipientGAL(): distlist's '%s' member", $to, $distListMembers[$j][PR_DISPLAY_NAME]));
+                            $recipientGal[] = $this->createResolveRecipient(SYNC_RESOLVERECIPIENTS_TYPE_GAL, $to, $distListMembers[$j], $nrDistListMembers);
+                        }
+                    }
+                    else {
+                        ZLog::Write(LOGLEVEL_DEBUG, sprintf("Kopano->resolveRecipientGAL(): '%s' is a dist list, but return it as is.", $to));
+                        $recipientGal[] = $this->createResolveRecipient(SYNC_RESOLVERECIPIENTS_TYPE_GAL, $abentries[$i][PR_SMTP_ADDRESS], $abentries[$i]);
                     }
                 }
                 elseif ($abentries[$i][PR_OBJECT_TYPE] == MAPI_MAILUSER) {
-                    $recipientGal[] = $this->createResolveRecipient(SYNC_RESOLVERECIPIENTS_TYPE_GAL, $to, $abentries[$i]);
+                    $recipientGal[] = $this->createResolveRecipient(SYNC_RESOLVERECIPIENTS_TYPE_GAL, $abentries[$i][PR_SMTP_ADDRESS], $abentries[$i]);
                 }
             }
 
-            ZLog::Write(LOGLEVEL_WBXML, "Found a recipient in GAL");
+            ZLog::Write(LOGLEVEL_WBXML, "Kopano->resolveRecipientGAL(): Found a recipient in GAL");
             return $recipientGal;
         }
         else {
-            ZLog::Write(LOGLEVEL_WARN, sprintf("No recipient found for: '%s' in GAL", $to));
+            ZLog::Write(LOGLEVEL_WARN, sprintf("Kopano->resolveRecipientGAL(): No recipient found for: '%s' in GAL", $to));
             return SYNC_RESOLVERECIPSSTATUS_RESPONSE_UNRESOLVEDRECIP;
         }
         return false;
@@ -2311,7 +2643,8 @@ class BackendKopano implements IBackend, ISearchProvider {
                             $endSlot--;
                         }
 
-                        for ($i = $startSlot; $i <= $endSlot; $i++) {
+                        // the endslot may be higher than the requested timeslots, in such case ignore free-busy unnecessary slots
+                        for ($i = $startSlot, $l = (($endSlot > $timeslots) ? ($timeslots - 1) : $endSlot); $i <= $l; $i++) {
                             // only set the new slot's free busy status if it's higher than the current one
                             if ($blockItem['status'] > $mergedFreeBusy[$i]) {
                                 $mergedFreeBusy[$i] = $blockItem['status'];
@@ -2376,20 +2709,28 @@ class BackendKopano implements IBackend, ISearchProvider {
      */
     private function isZPushEnabled() {
         $addressbook = $this->getAddressbook();
-        $userEntryid = mapi_getprops($this->store, array(PR_MAILBOX_OWNER_ENTRYID));
+        // this check needs to be performed on the store of the main (authenticated) user
+        $store = $this->storeCache[$this->mainUser];
+        $userEntryid = mapi_getprops($store, array(PR_MAILBOX_OWNER_ENTRYID));
         $mailuser = mapi_ab_openentry($addressbook, $userEntryid[PR_MAILBOX_OWNER_ENTRYID]);
         $enabledFeatures = mapi_getprops($mailuser, array(PR_EC_DISABLED_FEATURES));
         if (isset($enabledFeatures[PR_EC_DISABLED_FEATURES]) && is_array($enabledFeatures[PR_EC_DISABLED_FEATURES])) {
             $mobileDisabled = in_array(self::MOBILE_ENABLED, $enabledFeatures[PR_EC_DISABLED_FEATURES]);
             $outlookDisabled = in_array(self::OUTLOOK_ENABLED, $enabledFeatures[PR_EC_DISABLED_FEATURES]);
+            $deviceId = Request::GetDeviceID();
+            // Checks for deviceId present in zarafaDisabledFeatures LDAP array attribute. Check is performed case insensitive.
+            $deviceIdDisabled = ( ($deviceId !==null) && in_array($deviceId, array_map('strtolower', $enabledFeatures[PR_EC_DISABLED_FEATURES])) )? true : false;
             if ($mobileDisabled && $outlookDisabled) {
                 throw new FatalException("User is disabled for Z-Push.");
             }
             elseif (Request::IsOutlook() && $outlookDisabled) {
                 throw new FatalException("User is disabled for Outlook usage with Z-Push.");
             }
-            elseif (!Request::IsOutlook() && $mobileDisabled) {
+            elseif (!Request::IsOutlook() && $mobileDisabled && Request::GetDeviceType() !== "webservice" && Request::GetDeviceType() !== false) {
                 throw new FatalException("User is disabled for mobile device usage with Z-Push.");
+            }
+            elseif ($deviceIdDisabled) {
+                throw new FatalException(sprintf("User has deviceId %s disabled for usage with Z-Push.", $deviceId));
             }
         }
         return true;

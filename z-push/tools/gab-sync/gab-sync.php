@@ -24,6 +24,12 @@
 * Consult LICENSE file for details
 * ************************************************/
 
+// Path to the Z-Push directory relative to the gab-sync script.
+// The path set by default is as required for a GIT checkout.
+// It is also possible to use absolute path to z-push installation, e.g.
+// /usr/share/z-push/
+define('PATH_TO_ZPUSH', '../../src/');
+
 if (!defined('SYNC_CONFIG')) define('SYNC_CONFIG', 'config.php');
 include_once(SYNC_CONFIG);
 
@@ -31,7 +37,8 @@ include_once(SYNC_CONFIG);
  * MAIN
  */
     define('BASE_PATH_CLI',  dirname(__FILE__) ."/");
-    set_include_path(get_include_path() . PATH_SEPARATOR . BASE_PATH_CLI);
+    set_include_path(get_include_path() . PATH_SEPARATOR . BASE_PATH_CLI . PATH_TO_ZPUSH . PATH_SEPARATOR . PATH_TO_ZPUSH);
+
     try {
         GabSyncCLI::CheckEnv();
         GabSyncCLI::CheckOptions();
@@ -42,6 +49,9 @@ include_once(SYNC_CONFIG);
                 fwrite(STDERR, GabSyncCLI::GetErrorMessage() . PHP_EOL.PHP_EOL);
 
             echo GabSyncCLI::UsageInstructions();
+            if (GabSyncCLI::$help) {
+                exit(0);
+            }
             exit(1);
         }
         else if (!GabSyncCLI::SetupSyncWorker()) {
@@ -73,6 +83,8 @@ class GabSyncCLI {
     static private $uniqueId = false;
     static private $targetGab = false;
     static private $errormessage;
+
+    static public $help = false;
 
     /**
      * Returns usage instructions.
@@ -142,7 +154,7 @@ class GabSyncCLI {
         if (self::$errormessage)
             return;
 
-        $options = getopt("u:a:t:");
+        $options = getopt("u:a:t:h", array('help'));
 
         // get 'unique-id'
         if (isset($options['u']) && !empty($options['u']))
@@ -162,6 +174,11 @@ class GabSyncCLI {
             $action = strtolower(trim($options['a']));
         elseif (isset($options['action']) && !empty($options['action']))
             $action = strtolower(trim($options['action']));
+
+        if ((isset($options['h']) || isset($options['help'])) && $action === false) {
+            self::$help = true;
+            $action = 'help';
+        }
 
         // get a command for the requested action
         switch ($action) {
@@ -195,8 +212,12 @@ class GabSyncCLI {
                 self::$command = self::COMMAND_DELETEALL;
                 break;
 
+            case "help":
+                break;
+
             default:
                 self::UsageInstructions();
+                self::$help = false;
         }
     }
 

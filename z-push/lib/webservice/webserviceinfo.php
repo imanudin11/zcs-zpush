@@ -27,14 +27,14 @@
 class WebserviceInfo {
 
     /**
-     * Returns a list of folders of the Request::GetGETUser().
+     * Returns a list of folders of the requested user.
      * If the user has not enough permissions an empty result is returned.
      *
      * @access public
      * @return array
      */
     public function ListUserFolders() {
-        $user = Request::GetGETUser();
+        $user = Request::GetImpersonatedUser() ? Request::GetImpersonatedUser() : Request::GetGETUser();
         $output = array();
         $hasRights = ZPush::GetBackend()->Setup($user);
         ZLog::Write(LOGLEVEL_INFO, sprintf("WebserviceInfo::ListUserFolders(): permissions to open store '%s': %s", $user, Utils::PrintAsString($hasRights)));
@@ -54,6 +54,27 @@ class WebserviceInfo {
     }
 
     /**
+     * Returns signatures saved for the requested user.
+     *
+     * @access public
+     * @return KoeSignatures
+     */
+    public function GetSignatures() {
+        $user = Request::GetImpersonatedUser() ? Request::GetImpersonatedUser() : Request::GetGETUser();
+        $sigs = null;
+
+        $hasRights = ZPush::GetBackend()->Setup($user);
+        ZLog::Write(LOGLEVEL_INFO, sprintf("WebserviceInfo::GetSignatures(): permissions to open store '%s': %s", $user, Utils::PrintAsString($hasRights)));
+
+        if ($hasRights) {
+            $sigs = ZPush::GetBackend()->GetKoeSignatures();
+            ZPush::GetTopCollector()->AnnounceInformation(sprintf("Retrieved %d signatures", count($sigs->GetSignatures())), true);
+        }
+
+        return $sigs;
+    }
+
+    /**
      * Returns the Z-Push version.
      *
      * @access public
@@ -62,5 +83,24 @@ class WebserviceInfo {
     public function About() {
         ZLog::Write(LOGLEVEL_INFO, sprintf("WebserviceInfo->About(): returning Z-Push version '%s'", @constant('ZPUSH_VERSION')));
         return @constant('ZPUSH_VERSION');
+    }
+
+    /**
+     * Returns information about the user's store:
+     * number of folders, store size, full name, email address.
+     *
+     * @access public
+     * @return UserStoreInfo
+     */
+    public function GetUserStoreInfo() {
+        $userStoreInfo = null;
+        $user = Request::GetImpersonatedUser() ? Request::GetImpersonatedUser() : Request::GetGETUser();
+        $hasRights = ZPush::GetBackend()->Setup($user);
+        ZLog::Write(LOGLEVEL_INFO, sprintf("WebserviceInfo::GetUserStoreInfo(): permissions to open store '%s': %s", $user, Utils::PrintAsString($hasRights)));
+
+        if ($hasRights) {
+            $userStoreInfo = ZPush::GetBackend()->GetUserStoreInfo();
+        }
+        return $userStoreInfo;
     }
 }

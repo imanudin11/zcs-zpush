@@ -40,12 +40,19 @@ class BackendSearchLDAP implements ISearchProvider {
      * @throws StatusException
      */
     public function __construct() {
-        if (!function_exists("ldap_connect"))
+        if (!function_exists("ldap_connect")) {
             throw new StatusException("BackendSearchLDAP(): php-ldap is not installed. Search aborted.", SYNC_SEARCHSTATUS_STORE_SERVERERROR, null, LOGLEVEL_FATAL);
+        }
 
-        // connect to LDAP
-        $this->connection = @ldap_connect(LDAP_HOST, LDAP_PORT);
-        @ldap_set_option($this->connection, LDAP_OPT_PROTOCOL_VERSION, 3);
+        // Connect
+        if (defined('LDAP_SERVER_URI')) {
+            $this->connection = @ldap_connect(LDAP_SERVER_URI);
+            @ldap_set_option($this->connection, LDAP_OPT_PROTOCOL_VERSION, 3);
+        }
+        else {
+            $this->connection = false;
+            throw new StatusException("BackendSearchLDAP(): No LDAP server URI defined! Search aborted.", SYNC_SEARCHSTATUS_STORE_CONNECTIONFAILED, null, LOGLEVEL_ERROR);
+        }
 
         // Authenticate
         if (constant('ANONYMOUS_BIND') === true) {
@@ -83,15 +90,17 @@ class BackendSearchLDAP implements ISearchProvider {
 
 
     /**
-     * Queries the LDAP backend
+     * Queries the LDAP backend.
      *
-     * @param string        $searchquery        string to be searched for
-     * @param string        $searchrange        specified searchrange
+     * @param string                        $searchquery        string to be searched for
+     * @param string                        $searchrange        specified searchrange
+     * @param SyncResolveRecipientsPicture  $searchpicture      limitations for picture
      *
      * @access public
      * @return array        search results
+     * @throws StatusException
      */
-    public function GetGALSearchResults($searchquery, $searchrange) {
+    public function GetGALSearchResults($searchquery, $searchrange, $searchpicture) {
         global $ldap_field_map;
         if (isset($this->connection) && $this->connection !== false) {
             $searchfilter = str_replace("SEARCHVALUE", $searchquery, LDAP_SEARCH_FILTER);
@@ -132,6 +141,10 @@ class BackendSearchLDAP implements ISearchProvider {
                         else
                             $items[$rc][$key] = $searchresult[$i][$value];
                     }
+                }
+                // fallback to displayname if firstname and lastname not set
+                if (LDAP_SEARCH_NAME_FALLBACK && (!isset($items[$rc][SYNC_GAL_LASTNAME]) && !isset($items[$rc][SYNC_GAL_FIRSTNAME])) && isset($items[$rc][SYNC_GAL_DISPLAYNAME])) {
+                    $items[$rc][SYNC_GAL_LASTNAME] = $items[$rc][SYNC_GAL_DISPLAYNAME];
                 }
                 $rc++;
             }

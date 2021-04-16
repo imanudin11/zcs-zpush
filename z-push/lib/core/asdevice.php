@@ -58,6 +58,9 @@ class ASDevice extends StateObject {
                                     'koebuild' => false,
                                     'koebuilddate' => false,
                                     'koegabbackendfolderid' => false,
+                                    'koecapabilities' => array(),
+                                    'koelastaccess' => false,
+                                    'syncfiltertype' => false,
                                 );
 
     static private $loadedData;
@@ -115,7 +118,7 @@ class ASDevice extends StateObject {
 
                 // another user has a required action on this device
                 if (isset($asuserdata->wipeStatus) && $asuserdata->wipeStatus > SYNC_PROVISION_RWSTATUS_OK) {
-                    ZLog::Write(LOGLEVEL_INFO, sprintf("User '%s' has requested a remote wipe for this device on '%s'", $asuserdata->wipeRequestBy, strftime("%Y-%m-%d %H:%M", $asuserdata->wipeRequstOn)));
+                    ZLog::Write(LOGLEVEL_INFO, sprintf("User '%s' has requested a remote wipe for this device on '%s'", $asuserdata->wipeRequestBy, strftime("%Y-%m-%d %H:%M", $asuserdata->wipeRequestOn)));
 
                     // reset status to PENDING if wipe was executed before
                     $this->wipeStatus =  ($asuserdata->wipeStatus & SYNC_PROVISION_RWSTATUS_WIPED)?SYNC_PROVISION_RWSTATUS_PENDING:$asuserdata->wipeStatus;
@@ -174,18 +177,20 @@ class ASDevice extends StateObject {
     }
 
    /**
-     * Removes internal data from the object, so this data can not be exposed
+     * Removes internal data from the object, so this data can not be exposed.
+     *
+     * @param boolean $stripHierarchyCache  (opt) strips the hierarchy cache - default: true
      *
      * @access public
      * @return boolean
      */
-    public function StripData() {
+    public function StripData($stripHierarchyCache = true) {
         unset($this->changed);
         unset($this->unsetdata);
-        unset($this->hierarchyCache);
         unset($this->forceSave);
         unset($this->newdevice);
         unset($this->ignoredMessageIds);
+        $this->backend2folderidCache = false;
 
         if (isset($this->ignoredmessages) && is_array($this->ignoredmessages)) {
             $imessages = $this->ignoredmessages;
@@ -196,6 +201,14 @@ class ASDevice extends StateObject {
                 $unserializedMessage[] = $im;
             }
             $this->ignoredmessages = $unserializedMessage;
+        }
+
+
+        if (!$stripHierarchyCache && $this->hierarchyCache !== false && $this->hierarchyCache instanceof ChangesMemoryWrapper) {
+            $this->hierarchyCache->StripData();
+        }
+        else {
+            unset($this->hierarchyCache);
         }
 
         return true;
@@ -581,8 +594,8 @@ class ASDevice extends StateObject {
    /**
      * Sets the foldertype of a folder id
      *
-     * @param string        $uuid
-     * @param string        $folderid       (opt) if not set Hierarchy UUID is linked
+     * @param string        $folderid
+     * @param int           $foldertype         ActiveSync folder type (as on the mobile)
      *
      * @access public
      * @return boolean      true if the type was set or updated
@@ -655,6 +668,7 @@ class ASDevice extends StateObject {
      *                                                                  'C' (configured)
      *                                                                  'S' (shared)
      *                                                                  'G' (global address book)
+     *                                                                  'I' (impersonated)
      * @param string    $folderName             Folder name of the backend folder
      *
      * @access public
@@ -678,7 +692,20 @@ class ASDevice extends StateObject {
             }
         }
         if (is_array($this->backend2folderidCache) && isset($this->backend2folderidCache[$backendid])) {
-            return $this->backend2folderidCache[$backendid];
+            // Use cached version only if the folderOrigin matches - ZP-1449
+            if (Utils::GetFolderOriginFromId($this->backend2folderidCache[$backendid]) == $folderOrigin) {
+                return $this->backend2folderidCache[$backendid];
+            }
+            // if we have a different origin, we need to actively search for all synchronized folders, as they might be synched with a different origin
+            // the short-id is only used if the folder is being synchronized (in contentdata) - else any chached (temporarily) ids are NOT used
+            else {
+                foreach ($this->contentData as $folderid => $data) {
+                    if (isset($data[self::FOLDERBACKENDID]) && $data[self::FOLDERBACKENDID] == $backendid) {
+                        ZLog::Write(LOGLEVEL_DEBUG, sprintf("ASDevice->GetFolderIdForBackendId(): found backendid in contentdata but with different folder type. Lookup '%s' - synchronized id '%s'", $folderOrigin, $folderid));
+                        return $folderid;
+                    }
+                }
+            }
         }
 
         // nothing found? Then it's a new one, get and add it
@@ -764,11 +791,11 @@ class ASDevice extends StateObject {
      * @return mixed/boolean        false means the status is not available
      */
     public function GetFolderSyncStatus($folderid) {
-        if (isset($this->contentData) && isset($this->contentData[$folderid]) &&
-            isset($this->contentData[$folderid][self::FOLDERUUID]) && $this->contentData[$folderid][self::FOLDERUUID] !== false &&
-            isset($this->contentData[$folderid][self::FOLDERSYNCSTATUS]) )
+        if (isset($this->contentData[$folderid][self::FOLDERUUID], $this->contentData[$folderid][self::FOLDERSYNCSTATUS]) &&
+                $this->contentData[$folderid][self::FOLDERUUID] !== false) {
 
             return $this->contentData[$folderid][self::FOLDERSYNCSTATUS];
+        }
 
         return false;
     }
@@ -809,7 +836,10 @@ class ASDevice extends StateObject {
      * @return array
      */
     public function GetAdditionalFolders() {
-        return array_values($this->additionalfolders);
+        if (is_array($this->additionalfolders)) {
+            return array_values($this->additionalfolders);
+        }
+        return array();
     }
 
     /**
@@ -836,7 +866,7 @@ class ASDevice extends StateObject {
      * @param string    $folderid   the folder id of the additional folder.
      * @param string    $name       the name of the additional folder (has to be unique for all folders on the device).
      * @param string    $type       AS foldertype of SYNC_FOLDER_TYPE_USER_*
-     * @param int       $flags      Additional flags, like DeviceManager::FLD_FLAGS_REPLYASUSER
+     * @param int       $flags      Additional flags, like DeviceManager::FLD_FLAGS_SENDASOWNER
      * @param string    $parentid   the parentid of this folder.
      * @param boolean   $checkDups  indicates if duplicate names and ids should be verified. Default: true
      *
@@ -851,7 +881,7 @@ class ASDevice extends StateObject {
         }
 
         // check if type is of a additional user type
-        if (!in_array($type, array(SYNC_FOLDER_TYPE_USER_CONTACT, SYNC_FOLDER_TYPE_USER_APPOINTMENT, SYNC_FOLDER_TYPE_USER_TASK, SYNC_FOLDER_TYPE_USER_MAIL, SYNC_FOLDER_TYPE_USER_NOTE, SYNC_FOLDER_TYPE_USER_JOURNAL))) {
+        if (!in_array($type, array(SYNC_FOLDER_TYPE_USER_CONTACT, SYNC_FOLDER_TYPE_USER_APPOINTMENT, SYNC_FOLDER_TYPE_USER_TASK, SYNC_FOLDER_TYPE_USER_MAIL, SYNC_FOLDER_TYPE_USER_NOTE, SYNC_FOLDER_TYPE_USER_JOURNAL, SYNC_FOLDER_TYPE_OTHER))) {
             ZLog::Write(LOGLEVEL_ERROR, sprintf("ASDevice->AddAdditionalFolder(): folder can not be added because the specified type '%s' is not a permitted user type.", $type));
             return false;
         }
@@ -923,7 +953,7 @@ class ASDevice extends StateObject {
      *
      * @param string    $folderid   the folder id of the additional folder.
      * @param string    $name       the name of the additional folder (has to be unique for all folders on the device).
-     * @param int       $flags      Additional flags, like DeviceManager::FLD_FLAGS_REPLYASUSER
+     * @param int       $flags      Additional flags, like DeviceManager::FLD_FLAGS_SENDASOWNER
      * @param string    $parentid   the parentid of this folder.
      * @param boolean   $checkDups  indicates if duplicate names and ids should be verified. Default: true
      *
@@ -1011,7 +1041,7 @@ class ASDevice extends StateObject {
      *                              'parentid'  (string) the folderid of the parent folder. If no parent folder is set or the parent folder is not defined, '0' (main folder) is used.
      *                              'name'      (string) the name of the additional folder (has to be unique for all folders on the device).
      *                              'type'      (string) AS foldertype of SYNC_FOLDER_TYPE_USER_*
-     *                              'flags'     (int)    Additional flags, like DeviceManager::FLD_FLAGS_REPLYASUSER
+     *                              'flags'     (int)    Additional flags, like DeviceManager::FLD_FLAGS_SENDASOWNER
      *
      * @access public
      * @return boolean
@@ -1035,7 +1065,7 @@ class ASDevice extends StateObject {
         // transform our array in a key/value array where folderids are keys and do some basic checks
         $toOrder = array();
         $ordered = array();
-        $validTypes = array(SYNC_FOLDER_TYPE_USER_CONTACT, SYNC_FOLDER_TYPE_USER_APPOINTMENT, SYNC_FOLDER_TYPE_USER_TASK, SYNC_FOLDER_TYPE_USER_MAIL, SYNC_FOLDER_TYPE_USER_NOTE, SYNC_FOLDER_TYPE_USER_JOURNAL);
+        $validTypes = array(SYNC_FOLDER_TYPE_USER_CONTACT, SYNC_FOLDER_TYPE_USER_APPOINTMENT, SYNC_FOLDER_TYPE_USER_TASK, SYNC_FOLDER_TYPE_USER_MAIL, SYNC_FOLDER_TYPE_USER_NOTE, SYNC_FOLDER_TYPE_USER_JOURNAL, SYNC_FOLDER_TYPE_OTHER);
         foreach($folders as $f) {
             // fail early
             if (!$f['folderid'] || !$f['name']) {
@@ -1108,6 +1138,7 @@ class ASDevice extends StateObject {
      *                                                                  'C' (configured)
      *                                                                  'S' (shared)
      *                                                                  'G' (global address book)
+     *                                                                  'I' (impersonated)
      * @param string    $folderName             Folder name of the backend folder
      *
      * @access private

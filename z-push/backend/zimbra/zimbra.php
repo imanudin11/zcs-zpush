@@ -1,8 +1,8 @@
 <?php
-$GLOBALS['revision'] = "68"; // Used to output the script version to the debug log
+$GLOBALS['revision'] = "70"; // Used to output the script version to the debug log
 /***********************************************
 * File          :   zimbra.php
-* Revision      :   68 (25-May-2018)
+* Revision      :   70 (13-Mar-2021)
 * Project       :   Z-Push Zimbra Backend
 *                   https://sourceforge.net/projects/zimbrabackend
 * Description   :   A backend for Z-Push to use with the Zimbra Collaboration Suite,
@@ -13,7 +13,22 @@ $GLOBALS['revision'] = "68"; // Used to output the script version to the debug l
 *                   Mathias Kolb
 *                   Julien Laurent
 *
-* Changes       :   Changes Made To Revision 68: z-push-2 version ONLY
+* Changes       :   Changes Made To Revision 70: z-push-2 version ONLY
+*                     - Workaround Z-Push issue in SmartForward/SmartReply from shared folder
+*                     - Add 2 to continue statement in GetNextMessageBlock for Contacts
+*                     - Throw AuthenticationRequiredException for AUTH failures
+*
+*                   Changes Made To Revision 69: z-push-2 version ONLY
+*                     - Added descriptive WARN message for unavailable shared folder
+*                     - In isZimbraObjectInSyncInterval treat no response as false
+*                     - Fix processing of zimbraMailAlias to handle string if exactly one alias
+*                     - Fix ChangeMessage to strip input Categories from shared folder items
+*                     - Renamed constructor function of mime.php, mimePart.php and z_RTF.php
+*                     - Added hash to Primary folder stats to improve virtual folder change detection
+*                     - Added logic to clear cache on Logoff where folder changes are detected
+*                     - Updated comment and removed extra debug logging from recent fixes
+*
+*                   Changes Made To Revision 68: z-push-2 version ONLY
 *                     - Rename BackendSearchZimbra constructor for PHP 7+ compatability
 *                     - Add third parameter to definition of GetGALSearchResults() for Z-Push 2.4
 *                     - Added " around $zimbraFolderId for Task/Note in GetNextMessageBlock
@@ -648,6 +663,7 @@ class BackendZimbra extends BackendDiff {
 
     protected $_localCache = true;
     protected $_localCacheLifetime = 3600; // default 1 hour - override in config.php if required
+    protected $_clearCacheOnLogoff = false;
     protected $_saveCacheOnLogoff = false;
     protected $_cacheSupports = array('read','replied','forwarded','categories');
     protected $_shareIndex = array();
@@ -734,7 +750,7 @@ class BackendZimbra extends BackendDiff {
      * @return string       AS version constant
      */
     public function GetSupportedASVersion() {
-        return ZPush::ASV_14; 
+        return ZPush::ASV_141; 
     }
 
     /** Logon
@@ -1191,7 +1207,11 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
 
                     if (!$response) {
                         ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->Logon(): ' . 'END Logon - Proxy Error { connected = false }');
-                        throw new ServiceUnavailableException("Access denied. Proxy unable to reach user mailbox server");
+                        if (isset($this->_soapError) && (($this->_soapError == "account.AUTH_FAILED") || ($this->_soapError == "service.AUTH_EXPIRED"))) {
+                            throw new AuthenticationRequiredException("Zimbra->SoapRequest(): Auth Error - Force client to reconnect.");
+                        } else {
+                            throw new ServiceUnavailableException("Access denied. Proxy unable to reach user mailbox server");
+                        }
                         return false;
                     }
 
@@ -1307,7 +1327,11 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
 
                     if (!$response) {
                         ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->Logon(): ' . 'END Logon - Proxy Error { connected = false }');
-                        throw new ServiceUnavailableException("Access denied. Proxy unable to reach user mailbox server");
+                        if (isset($this->_soapError) && (($this->_soapError == "account.AUTH_FAILED") || ($this->_soapError == "service.AUTH_EXPIRED"))) {
+                            throw new AuthenticationRequiredException("Zimbra->SoapRequest(): Auth Error - Force client to reconnect.");
+                        } else {
+                            throw new ServiceUnavailableException("Access denied. Proxy unable to reach user mailbox server");
+                        }
                         return false;
                     }
 
@@ -1474,8 +1498,6 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
             }
             $soap .= '</BatchRequest>';
 
-            $this->_cacheChangeToken = $this->_changetoken;
-
             // If there are shared folders listed we need to make an additional call to populate the data for those that is not returned in the refresh block
             if (isset( $_shareOwners)) {
                 $returnJSON = true;
@@ -1494,18 +1516,25 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
                     //ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' .  'Accounts: '. $accounts );
 
                     for ($a=0;$a<$accounts;$a++) {
-                        $topLevelFolders = count($remoteFolderList[$a]['folder'][0]['folder']);
-                        //ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' .  'TopLevelFolders: '. $topLevelFolders );
+                        if (!isset($remoteFolderList[$a]['folder'])) {
+                            ZLog::Write(LOGLEVEL_WARN, 'Zimbra->Logon(): ' .  'A folder shared with this user is not accessible. If it is permanently unavailable it should be removed from the Web client' );
+                        } else {
+                            $topLevelFolders = count($remoteFolderList[$a]['folder'][0]['folder']);
+                            //ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' .  'TopLevelFolders: '. $topLevelFolders );
 
-                        for ($i=0;$i<$topLevelFolders;$i++) {
-                            //ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetZimbraSmartFolders(): ' .  'Process Folder ['.$remoteFolderList[$a]['folder'][0]['folder'][$i]['name'].']');
-                            $this->ProcessZimbraSharedFolderRecursive($remoteFolderList[$a]['folder'][0]['folder'][$i] );
+                            for ($i=0;$i<$topLevelFolders;$i++) {
+                                //ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetZimbraSmartFolders(): ' .  'Process Folder ['.$remoteFolderList[$a]['folder'][0]['folder'][$i]['name'].']');
+                                $this->ProcessZimbraSharedFolderRecursive($remoteFolderList[$a]['folder'][0]['folder'][$i] );
+                            }
                         }
                     }
                 }
             }
 
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . 'Primary Folders - Addressbook ['. $this->_primary['contact'] .'] - Calendar ['. $this->_primary['appointment'] .'] - Task ['. $this->_primary['task'] .'] - Note ['. $this->_primary['note'] . '] ');
+
+            // Moved after shared folders setup for Virtual Folder Notifications fix
+            $this->_cacheChangeToken = $this->_changetoken;
 
         } else {
             $this->_connected = false;
@@ -1549,6 +1578,12 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
                     }
                 }
 
+                if ($this->_clearCacheOnLogoff) {
+                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logoff(): ' .  'Setting CacheClearedOnLogoff' );
+                    $this->_cacheChangeToken = "CacheClearedOnLogoff";
+                    $this->_saveCacheOnLogoff = true;
+                }
+				
                 if ($this->_saveCacheOnLogoff || $cacheUpdated || $cacheCleaned) {
                     ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logoff(): ' .  'Cache changed in this session - SAVE it' );
 
@@ -1600,6 +1635,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
             $this->_virtual['appointment'] = NULL;
             $this->_virtual['task'] = NULL;
             $this->_virtual['note'] = NULL;
+
 //            $this->_devidToIndex = NULL;
             $this->_idToIndex = NULL;
 
@@ -1610,6 +1646,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
             unset( $this->_virtual['appointment'] );
             unset( $this->_virtual['task'] );
             unset( $this->_virtual['note'] );
+
 //            unset( $this->_devidToIndex );
             unset( $this->_idToIndex );
 
@@ -1717,9 +1754,13 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->Logon(): ' . "_xFwdForForMailboxLog ..." . 
                 $this->_sendAsName = $subset['cn'];
             }
             if (isset($subset['zimbraMailAlias'])) {
-                $aliases = count($subset['zimbraMailAlias']);
-                for ($i=0;$i<$aliases;$i++) {
-                    $this->_addresses[] = $subset['zimbraMailAlias'][$i];
+                if (is_array($subset['zimbraMailAlias'])) {
+                    $aliases = count($subset['zimbraMailAlias']);
+                    for ($i=0;$i<$aliases;$i++) {
+                        $this->_addresses[] = $subset['zimbraMailAlias'][$i];
+                    }
+                } else {
+                    $this->_addresses[] = $subset['zimbraMailAlias'];
                 }
             }
 
@@ -2199,7 +2240,7 @@ debugLog( "Transitions Slice=" . print_r(array_slice($transitions, 0, 3)));
                     $this->_shareOwners[$folder['zid']] = $folder['owner'];
                 }
             } else {
-                ZLog::Write(LOGLEVEL_WARN, 'Zimbra->ProcessZimbraSmartFolderRecursive(): ' . 'Possible orphaned share - Folder ['.$folderName.'] has zid ['.$folder['zid'].'] but no owner - Folder should be removed from Web client' );
+                ZLog::Write(LOGLEVEL_WARN, 'Zimbra->ProcessZimbraSmartFolderRecursive(): ' . 'Possible orphaned share - Folder ['.$folderName.'] has zid ['.$folder['zid'].'] but no owner - Folder should be removed from the Web client' );
             }
         }
 
@@ -2840,7 +2881,6 @@ debugLog( "Transitions Slice=" . print_r(array_slice($transitions, 0, 3)));
         $this->_primary['task'] = "";
         $this->_primary['note'] = "";
 
-
 /*
         // Update $_userFolderTypeActive with derived settings. System configs override user directives.
         foreach ( $this->_userFolderTypeActive as $key=>$value ) {
@@ -2905,7 +2945,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetZimbraFolders(): ' .  'SOAP response: '.
                                 $this->_shareOwners[$array[$i]['zid']] = $array[$i]['owner'];
                             }
                         } else {
-                            ZLog::Write(LOGLEVEL_WARN, 'Zimbra->ProcessZimbraSmartFolderRecursive(): ' . 'Possible orphaned share - Folder ['.$array[$i]['name'].'] has zid ['.$array[$i]['zid'].'] but no owner - Folder should be removed from Web client' );
+                            ZLog::Write(LOGLEVEL_WARN, 'Zimbra->ProcessZimbraSmartFolderRecursive(): ' . 'Possible orphaned share - Folder ['.$array[$i]['name'].'] has zid ['.$array[$i]['zid'].'] but no owner - Folder should be removed from the Web client' );
                         }
                     }
 
@@ -3418,6 +3458,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetZimbraFolders(): ' .  'SOAP response: '.
             }
         }
         ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderIndex(): ' .  'Folder Not Found - FolderSync Required ' );
+        $this->_clearCacheOnLogoff = true;
         if (defined('SyncCollections::HIERARCHY_CHANGED')) {
             throw new StatusException("Zimbra->GetFolderIndex(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
         } else {
@@ -3437,6 +3478,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetZimbraFolders(): ' .  'SOAP response: '.
             }
         }
         ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderIndexZimbraID(): ' .  'Folder Not Found - FolderSync Required ' );
+        $this->_clearCacheOnLogoff = true;
         if (defined('SyncCollections::HIERARCHY_CHANGED')) {
             throw new StatusException("Zimbra->GetFolderIndexZimbraID(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
         } else {
@@ -3931,7 +3973,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeFolder(): ' .  'OldID is set - Want t
                         // Find The Contact Type And Exclude Contact Groups
                         if (isset($items[$i]['_attrs']['type'])) {
                             if ($items[$i]['_attrs']['type'] == "group") {
-                                continue;
+                                continue 2;
                             }
                         }
                         break;
@@ -3991,6 +4033,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeFolder(): ' .  'OldID is set - Want t
         // send back an empty list for the folder
         if (isset($this->_userFolderTypeActive[$view]) && ($this->_userFolderTypeActive[$view] == false)) {
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMessageList(): ' .  'END GetMessageList - Folder Type ['.$view.'] is now INACTIVE - FolderSync Required ' );
+            $this->_clearCacheOnLogoff = true;
             if (defined('SyncCollections::HIERARCHY_CHANGED')) {
                 throw new StatusException("Zimbra->GetMessageList(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
             } else {
@@ -4802,9 +4845,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMessage(): ' .  'Batch MSG ['.print_r($m
                     $output->internetcpid = 65001;
 
 				
-                    // Message Has Tags - Sync them as Categories to Phone
-                    if (isset($msg['t']) && (trim($msg['t']) != "")) {
-
+                    // Message Has Tags - Sync them as Categories to Client
+                    if (isset($msg['tn']) && (trim($msg['tn']) != "")) {
+                        $output->categories = explode( ',', trim($msg['tn']) );
+                    } elseif (isset($msg['t']) && (trim($msg['t']) != "")) {
                         $output->categories = $this->TagsToCategories( trim($msg['t']) );
                     }
 
@@ -5000,8 +5044,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMessage(): ' .  'Batch MSG ['.print_r($m
 
                     $output = new SyncContact();
 
-                    // Contact Has Tags - Sync them as Categories to Phone
-                    if (isset($item['t']) && (trim($item['t']) != "")) {
+                    // Contact Has Tags - Sync them as Categories to Client
+                    if (isset($item['tn']) && (trim($item['tn']) != "")) {
+                        $output->categories = explode( ',', trim($item['tn']) );
+                    } elseif (isset($item['t']) && (trim($item['t']) != "")) {
                       $output->categories = $this->TagsToCategories( $item['t'] );
                     }
 																					
@@ -5203,6 +5249,13 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMessage(): ' .  'Batch MSG ['.print_r($m
                             // e.g. 1275619811 (No TZ)
                             $subApp->dtstamp = substr( $this->fixMS( $item['inv'][$i]['comp'][0]['d'] ), 0, 10);
                             $subApp->zimbraInvId = $item['id'] . "-" . $item['inv'][$i]['id'];
+
+                            // Appointment Has Tags - Sync them as Categories to Client
+                            if (isset($item['tn']) && (trim($item['tn']) != "")) {
+                                $subApp->categories = explode( ',', trim($item['tn']) );
+                            } elseif (isset($item['t']) && (trim($item['t']) != "")) {
+                                $subApp->categories = $this->TagsToCategories( $item['t'] );
+                            }
 
                             if (!$bSupApp) { // Only include on main appointment - not on exceptions
                                 $subApp->uid = $item['inv'][$i]['comp'][0]['uid'];
@@ -5461,9 +5514,11 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMessage(): ' .  'Batch MSG ['.print_r($m
                             }
 */
 
-                            // Appointment Has Tags - Sync them as Categories to Phone
-                            if (isset($item['t']) && (trim($item['t']) != "")) {
-                              $subApp->categories = $this->TagsToCategories( $item['t'] );
+                            // Appointment Has Tags - Sync them as Categories to Client
+                            if (isset($item['tn']) && (trim($item['tn']) != "")) {
+                                $subApp->categories = explode( ',', trim($item['tn']) );
+                            } elseif (isset($item['t']) && (trim($item['t']) != "")) {
+                                $subApp->categories = $this->TagsToCategories( $item['t'] );
                             }
 						
                             if(isset($item['inv'][$i]['comp'][0]['name'])) {
@@ -5849,8 +5904,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMessage(): ' .  'Batch MSG ['.print_r($m
                         $output->remindertime = ""; 
                     }
 
-                    // Task Has Tags - Sync them as Categories to Phone
-                    if (isset($item['t']) && (trim($item['t']) != "")) {
+                    // Task Has Tags - Sync them as Categories to Client
+                    if (isset($item['tn']) && (trim($item['tn']) != "")) {
+                        $output->categories = explode( ',', trim($item['tn']) );
+                    } elseif (isset($item['t']) && (trim($item['t']) != "")) {
                       $output->categories = $this->TagsToCategories( $item['t'] );
                     }
 
@@ -5924,8 +5981,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMessage(): ' .  'Batch MSG ['.print_r($m
                         }
                     }
 
-                    // Task Has Tags - Sync them as Categories to Phone
-                    if (isset($item['t']) && (trim($item['t']) != "")) {
+                    // Note Has Tags - Sync them as Categories to Client
+                    if (isset($item['tn']) && (trim($item['tn']) != "")) {
+                        $output->categories = explode( ',', trim($item['tn']) );
+                    } elseif (isset($item['t']) && (trim($item['t']) != "")) {
                         $output->categories = $this->TagsToCategories( $item['t'] );
                     }
 
@@ -7196,7 +7255,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetAllBodyRecursive(): ' .  'Inline Image ?
 
         // check if the message is in the current syncinterval
         if (($id != "") && (!$this->isZimbraObjectInSyncInterval($folderid, $id, $contentParameters)))
-            throw new StatusException(sprintf("Zimbra->DeleteMessage('%s'): Message is outside the sync interval and so far not deleted.", $id), SYNC_STATUS_OBJECTNOTFOUND);
+            throw new StatusException(sprintf("Zimbra->ChangeMessage('%s'): Message is outside the sync interval and so far not deleted.", $id), SYNC_STATUS_OBJECTNOTFOUND);
 
 
         // When Zimbra moves an item from a folder owned by one UserID to a folder owned by another UserID
@@ -7216,12 +7275,29 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetAllBodyRecursive(): ' .  'Inline Image ?
             $folderOwner = $folderOwnerId[0];
         }
 
+        // Note: Check for '-' failing also caters for a new item where the id will be empty
         if (strpos($id, '-') === false) {
             $idOwner = 'ME';
         } else {
             $idOwnerId = explode( '-', $id );
             $idOwner = $idOwnerId[0];
         }
+
+        // Only attempt to import TAGS/Categiries if the folder is owned by the user
+        $inputtags = "";
+        $inputattribute = "";
+        if (isset($input->categories) and is_array($input->categories)) {
+            if (('ME' == $folderOwner) && ('ME' == $idOwner)) {
+                $inputTagIds = $this->CategoriesToTags($input->categories);
+				
+                $inputtags = implode( ",",$inputTagIds);
+                $inputattribute = ' t="'.$inputtags.'" ';
+
+            } else {
+                ZLog::Write(LOGLEVEL_INFO, 'Zimbra->ChangeMessage(): ' . 'Shared folder - Stripping client supplied Categories from input item to prevent the update failing!' );
+            }
+        }
+
         if ($folderOwner != $idOwner) {
 /*
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' . 'END ChangeMessage { PREVENTED FROM MOVING ITEMS BETWEEN ACCOUNTS }');
@@ -7254,6 +7330,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetAllBodyRecursive(): ' .  'Inline Image ?
             case 'message':
                 ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'ChangeMessage CALLED for an EMAIL ! - updating "flag" or "categories"' );
 
+/*
                 if (isset($input->categories) and is_array($input->categories)) {
                     $msgTagIds = $this->CategoriesToTags($input->categories);
 				
@@ -7264,6 +7341,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetAllBodyRecursive(): ' .  'Inline Image ?
                     $msgtags = "";
                     $tagattribute = "";
                 }
+*/
 
                 $stat = $this->StatMessage( $this->_folders[$index]->devid, $id );
 //ZLog::Write(LOGLEVEL_DEBUG, 'Stat ['.print_r( $stat, true ) .']' );
@@ -7278,10 +7356,12 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetAllBodyRecursive(): ' .  'Inline Image ?
                     $result = $this->SetMessageFlag($this->_folders[$index]->devid, $id, 0);
                 }
 
-                // Modifying existing appointment - Cannot apply TAGS to shared items - so don't even try
-                if (strrpos($id,':') === false) {
+                // Modifying existing message - Cannot apply TAGS to shared items - so don't even try
+//                if (strrpos($id,':') === false) {
+                if ('ME' == $idOwner) {
+
                     $soap ='<ItemActionRequest xmlns="urn:zimbraMail">
-                            <action id="'.$id.'" op="update" t="'.$msgtags.'" />
+                            <action id="'.$id.'" op="update" t="'.$inputtags.'" />
                             </ItemActionRequest> ';
                     $returnJSON = true;
                     $actionResponse = $this->SoapRequest($soap, false, false, $returnJSON);
@@ -7326,6 +7406,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Supported Fields: '. print_r( $supportedFields, tru
                 //}
 
 //                if (isset($input->categories) and (trim($input->categories) != "")) {
+/*
                 if (isset($input->categories) and is_array($input->categories)) {
                     $contactTagIds = $this->CategoriesToTags($input->categories);
 				
@@ -7336,9 +7417,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Supported Fields: '. print_r( $supportedFields, tru
                     $contacttags = "";
                     $tagattribute = "";
                 }
+*/
 
                 if($id == '') {
-                    $soap = '<CreateContactRequest xmlns="urn:zimbraMail" verbose="0"><cn l="'.$zimbraFolderId.'" '.$tagattribute.' >';
+                    $soap = '<CreateContactRequest xmlns="urn:zimbraMail" verbose="0"><cn l="'.$zimbraFolderId.'" '.$inputattribute.' >';
                 } else {
                     $soap = '<ModifyContactRequest xmlns="urn:zimbraMail" verbose="0"><cn id="'.$id.'" >';
                 }
@@ -7491,9 +7573,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'v has a comma' );
 						unset($array);
                     } else {
                         // Modifying existing contact - Cannot apply TAGS to shared items - so don't even try
-                        if (strrpos($id,':') === false) {
+//                        if (strrpos($id,':') === false) {
+                        if ('ME' == $idOwner) {
                             $soap ='<ContactActionRequest xmlns="urn:zimbraMail">
-                                      <action id="'.$id.'" op="update" t="'.$contacttags.'" />
+                                      <action id="'.$id.'" op="update" t="'.$inputtags.'" />
                                     </ContactActionRequest> ';
                             $returnJSON = true;
                             $actionResponse = $this->SoapRequest($soap, false, false, $returnJSON);
@@ -7516,7 +7599,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'v has a comma' );
 
             case 'appointment':
 
-                ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'Input Appt: ' . print_r( $input, true ), false );
+//                ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'Input Appt: ' . print_r( $input, true ), false );
 
                 if (!$contentParameters) {
                     // For z-push 2 releases 2.0.7 and earlier Content Parameters are not being set before the call to ChangeMessage
@@ -7537,6 +7620,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'v has a comma' );
 
 
 //                if (isset($input->categories) and (trim($input->categories) != "")) {
+/*
                 if (isset($input->categories) and is_array($input->categories)) {
                     $apptTagIds = $this->CategoriesToTags($input->categories);
 				
@@ -7546,18 +7630,19 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'v has a comma' );
                     $appttags = "";
                     $tagattribute = "";
                 }
+*/
 
                 $zimbraStrippedExceptions = false;
                 if($id == '') {
 
                     if ($this->_serverInviteReply) {
-                        $soap = '<CreateAppointmentRequest xmlns="urn:zimbraMail"><m l="'.$zimbraFolderId.'" '.$tagattribute.' d="'.$input->dtstamp.'000">';
+                        $soap = '<CreateAppointmentRequest xmlns="urn:zimbraMail"><m l="'.$zimbraFolderId.'" '.$inputattribute.' d="'.$input->dtstamp.'000">';
                     } else {
-                        $soap = '<SetAppointmentRequest xmlns="urn:zimbraMail" l="'.$zimbraFolderId.'" '.$tagattribute.'><default><m>';
+                        $soap = '<SetAppointmentRequest xmlns="urn:zimbraMail" l="'.$zimbraFolderId.'" '.$inputattribute.'><default><m>';
                     }
                 } else {
                     $preModAppt = $this->GetMessage($folderid, $id, $contentParameters); 
-                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'GetApptReq Original Appt: ' . print_r( $preModAppt, true ), false );
+//                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): ' .  'GetApptReq Original Appt: ' . print_r( $preModAppt, true ), false );
 
                     if (!isset($input->timezone)) {
                         $input->timezone = $preModAppt->timezone;
@@ -8127,7 +8212,7 @@ if (is_integer($preModAppt->recurrence->occurrences)) { ZLog::Write(LOGLEVEL_DEB
                         // Modifying existing appointment - Cannot apply TAGS to shared items - so don't even try
                         if (strrpos($id,':') === false) {
                             $soap ='<ItemActionRequest xmlns="urn:zimbraMail">
-                                      <action id="'.$id.'" op="update" t="'.$appttags.'" />
+                                      <action id="'.$id.'" op="update" t="'.$inputtags.'" />
                                     </ItemActionRequest> ';
                             $actionResponse = $this->SoapRequest($soap, false, false, $returnJSON);
                             if($actionResponse) {
@@ -8783,9 +8868,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): Both have asbody->data and
             						unset($array);
                                 } else {
                                     // Modifying existing appointment - Cannot apply TAGS to shared items - so don't even try
-                                    if (strrpos($id,':') === false) {
+//                                    if (strrpos($id,':') === false) {
+                                    if ('ME' == $idOwner) {
                                         $soap ='<ItemActionRequest xmlns="urn:zimbraMail">
-                                                  <action id="'.$id.'" op="update" t="'.$appttags.'" />
+                                                  <action id="'.$id.'" op="update" t="'.$inputtags.'" />
                                                 </ItemActionRequest> ';
                                         $actionResponse = $this->SoapRequest($soap, false, false, $returnJSON);
                                         if($actionResponse) {
@@ -8821,6 +8907,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): Both have asbody->data and
             case 'task':
 
 //                if (isset($input->categories) and (trim($input->categories) != "")) {
+/*
                 if (isset($input->categories) and is_array($input->categories)) {
                     $taskTagIds = $this->CategoriesToTags($input->categories);
 				
@@ -8831,11 +8918,12 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): Both have asbody->data and
                     $tasktags = "";
                     $tagattribute = "";
                 }
+*/
                 $taskOrganizer = $this->_sendAsEmail;
 
 
                 if($id == '') {
-                    $soap = '<CreateTaskRequest xmlns="urn:zimbraMail"><m l="'.$zimbraFolderId.'" '.$tagattribute.' >';
+                    $soap = '<CreateTaskRequest xmlns="urn:zimbraMail"><m l="'.$zimbraFolderId.'" '.$inputattribute.' >';
                 } else {
                     $soap ='<GetMsgRequest xmlns="urn:zimbraMail">
                                <m id="'.$id.'"></m>
@@ -9095,9 +9183,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): Both have asbody->data and
                         unset($array);
                     } else {
                         // Modifying existing task - Cannot apply TAGS to shared items - so don't even try
-                        if (strrpos($id,':') === false) {
+//                        if (strrpos($id,':') === false) {
+                        if ('ME' == $idOwner) {
                             $soap ='<ItemActionRequest xmlns="urn:zimbraMail">
-                                      <action id="'.$id.'" op="update" t="'.$tasktags.'" />
+                                      <action id="'.$id.'" op="update" t="'.$inputtags.'" />
                                     </ItemActionRequest> ';
                             $returnJSON = true;
                             $actionResponse = $this->SoapRequest($soap, false, false, $returnJSON);
@@ -9121,6 +9210,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): Both have asbody->data and
             case 'note':
 
 //                if (isset($input->categories) and (trim($input->categories) != "")) {
+/*	
                 if (isset($input->categories) and is_array($input->categories)) {
                     $taskTagIds = $this->CategoriesToTags($input->categories);
 				
@@ -9131,10 +9221,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): Both have asbody->data and
                     $tasktags = "";
                     $tagattribute = "";
                 }
-
+*/
 
                 if($id == '') {
-                    $soap = '<CreateTaskRequest xmlns="urn:zimbraMail"><m l="'.$zimbraFolderId.'" '.$tagattribute.' >';
+                    $soap = '<CreateTaskRequest xmlns="urn:zimbraMail"><m l="'.$zimbraFolderId.'" '.$inputattribute.' >';
                 } else {
                     $soap ='<GetMsgRequest xmlns="urn:zimbraMail">
                                <m id="'.$id.'"></m>
@@ -9250,9 +9340,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangeMessage(): Both have asbody->data and
                         unset($array);
                     } else {
                         // Modifying existing task - Cannot apply TAGS to shared items - so don't even try
-                        if (strrpos($id,':') === false) {
+//                        if (strrpos($id,':') === false) {
+                        if ('ME' == $idOwner) {
                             $soap ='<ItemActionRequest xmlns="urn:zimbraMail">
-                                      <action id="'.$id.'" op="update" t="'.$tasktags.'" />
+                                      <action id="'.$id.'" op="update" t="'.$inputtags.'" />
                                     </ItemActionRequest> ';
                             $returnJSON = true;
                             $actionResponse = $this->SoapRequest($soap, false, false, $returnJSON);
@@ -9411,7 +9502,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SetMessageFlag(): ' .  'Setting Flag' );
 
         // check if the message is in the current syncinterval
         if (!$this->isZimbraObjectInSyncInterval($folderid, $id, $contentParameters))
-            throw new StatusException(sprintf("Zimbra->DeleteMessage('%s'): Message is outside the sync interval and so far not deleted.", $id), SYNC_STATUS_OBJECTNOTFOUND);
+            throw new StatusException(sprintf("Zimbra->MoveMessage('%s'): Message is outside the sync interval and so far not deleted.", $id), SYNC_STATUS_OBJECTNOTFOUND);
 
         $index = $this->GetFolderIndex($folderid);
         $view = $this->_folders[$index]->view;
@@ -9499,7 +9590,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SetMessageFlag(): ' .  'Setting Flag' );
                     }
 
                     $preModAppt = $this->GetMessage($folderid, $id, $contentParameters); 
-//                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->DeleteMessage(): ' .  'GetApptReq Original Appt: ' . print_r( $preModAppt, true ), false );
+//                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->MoveMessage(): ' .  'GetApptReq Original Appt: ' . print_r( $preModAppt, true ), false );
 
                     if ($preModAppt->isorganizer == 1) {
                         $invId = $preModAppt->zimbraInvId;
@@ -9577,7 +9668,10 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SetMessageFlag(): ' .  'Setting Flag' );
      *
      */
     public function DeleteMessage($folderid, $id, $contentParameters) {
-        ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->DeleteMessage(): ' . 'START DeleteMessage { folderid = ' . $folderid . '; id = ' . $id . ' }');
+        ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->DeleteMessage(): ' . 'START DeleteMessage { folderid = ' . $folderid . '; id = ' . $id . '; contentParameters = OBJECT }');
+
+$deletesAsMoves =  $contentParameters->GetDeletesAsMoves();
+        ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->DeleteMessage(): ' . 'DeletesAsMoves = [' . $deletesAsMoves . ']');
 
 
         if ($this->_localCache) {
@@ -9744,10 +9838,13 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SetMessageFlag(): ' .  'Setting Flag' );
                     unset($response);
 
                     if (!isset($array['Body']['GetItemResponse']['m'][0])) {
-                        ZLog::Write(LOGLEVEL_DEBUG, sprintf("Zimbra->isZimbraObjectInSyncInterval('%s'): Message not found !", $id));
+                        ZLog::Write(LOGLEVEL_DEBUG, sprintf("Zimbra->isZimbraObjectInSyncInterval('%s'): Message not found!", $id));
                         return false;
                     }
-                }
+                } else {
+                    ZLog::Write(LOGLEVEL_DEBUG, sprintf("Zimbra->isZimbraObjectInSyncInterval('%s'): Error searching for Message!", $id));
+                    return false;
+				}
 
                 $zimbraFolderId = $array['Body']['GetItemResponse']['m'][0]['l'];
                 $limit = 500;
@@ -9803,6 +9900,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SetMessageFlag(): ' .  'Setting Flag' );
                 return false;
 
                 break;
+
             case "Calendar":
                 $cutoffdate = ($filtertype) ? Utils::GetCutOffDate($filtertype) : false;
 
@@ -10314,6 +10412,18 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
     public function ChangesSinkNotify( $CalledAfter, &$notify, &$notifications, &$clearCacheList, &$needDelay) {
     ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSinkNotify(): ' .  'START ChangesSinkNotify - CalledAfter '.$CalledAfter.'; ' );
 
+        if (( isset( $notify['created']['link'] )) ||
+            ( isset( $notify['created']['folder'] ))) {
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSinkNotify(): ' .  'New Folder/Link Detected - FolderSync Required ' );
+            $this->_clearCacheOnLogoff = true;
+            if (defined('SyncCollections::HIERARCHY_CHANGED')) {
+                throw new StatusException("Zimbra->ChangesSinkNotify(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
+            } else {
+                throw new StatusException("Zimbra->ChangesSinkNotify(): HierarchySync required.", SyncCollections::ERROR_WRONG_HIERARCHY);
+            }
+        }
+
+
         if (( isset( $notify['created']['appt'] )) ||
             ( isset( $notify['created']['task'] )) ||
             ( isset( $notify['created']['cn'] ))) {
@@ -10334,6 +10444,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
             for ($i=0;$i<$changes;$i++) {
                 if ( isset( $mods[$i]['name'] ) ) {
                     ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSinkNotify(): ' .  'Folder Name Changed - FolderSync Required ' );
+                    $this->_clearCacheOnLogoff = true;
                     if (defined('SyncCollections::HIERARCHY_CHANGED')) {
                         throw new StatusException("Zimbra->ChangesSinkNotify(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
                     } else {
@@ -10342,6 +10453,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
 
                 } elseif ( isset( $mods[$i]['l'] ) ) {
                     ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSinkNotify(): ' .  'Folder Move/Deletion/Move To Trash - FolderSync Required ' );
+                    $this->_clearCacheOnLogoff = true;
                     if (defined('SyncCollections::HIERARCHY_CHANGED')) {
                         throw new StatusException("Zimbra->ChangesSinkNotify(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
                     } else {
@@ -10361,6 +10473,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
                         // Mark _cacheChangeToken as ForceRefresh to make sure _folders gets refreshed
                         // Changes to linked folders, notified here, will not update the ChangeToken for the current user
                         $this->_cacheChangeToken = "ForceRefresh";
+                        $this->_saveCacheOnLogoff = true;
                     }
                     if (isset($this->_virtual['contact']) && in_array($this->_folders[$this->_idToIndex[$mods[$i]['id']]]->devid, $this->_virtual['contact'])) {
                         $notifications[] = $this->_primary['contact'];
@@ -10454,6 +10567,16 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
 
             if ( isset( $notify['created']['folder'] ) || isset( $notify['deleted']['folder'] )) {
                 ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Folder Creation/Deletion - FolderSync Required ' );
+                $this->_clearCacheOnLogoff = true;
+                if (defined('SyncCollections::HIERARCHY_CHANGED')) {
+                    throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
+                } else {
+                    throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::ERROR_WRONG_HIERARCHY);
+                }
+            }
+            if ( isset( $notify['created']['link'] ) || isset( $notify['deleted']['link'] )) {
+                ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Shared Folder Creation/Deletion - FolderSync Required ' );
+                $this->_clearCacheOnLogoff = true;
                 if (defined('SyncCollections::HIERARCHY_CHANGED')) {
                     throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
                 } else {
@@ -10495,6 +10618,16 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
 
                 if ( isset( $notify['created']['folder'] ) || isset( $notify['deleted']['folder'] )) {
                     ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Folder Creation/Deletion - FolderSync Required ' );
+                    $this->_clearCacheOnLogoff = true;
+                    if (defined('SyncCollections::HIERARCHY_CHANGED')) {
+                        throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
+                    } else {
+                        throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::ERROR_WRONG_HIERARCHY);
+                    }
+                }
+                if ( isset( $notify['created']['link'] ) || isset( $notify['deleted']['link'] )) {
+                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Shared Folder Creation/Deletion - FolderSync Required ' );
+                    $this->_clearCacheOnLogoff = true;
                     if (defined('SyncCollections::HIERARCHY_CHANGED')) {
                         throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
                     } else {
@@ -10530,6 +10663,16 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
 
             if ( isset( $notify['created']['folder'] ) || isset( $notify['deleted']['folder'] )) {
                 ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Folder Creation/Deletion - FolderSync Required ' );
+                $this->_clearCacheOnLogoff = true;
+                if (defined('SyncCollections::HIERARCHY_CHANGED')) {
+                    throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
+                } else {
+                    throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::ERROR_WRONG_HIERARCHY);
+                }
+            }
+            if ( isset( $notify['created']['link'] ) || isset( $notify['deleted']['link'] )) {
+                ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Shared Folder Creation/Deletion - FolderSync Required ' );
+                $this->_clearCacheOnLogoff = true;
                 if (defined('SyncCollections::HIERARCHY_CHANGED')) {
                     throw new StatusException("Zimbra->ChangesSink(): HierarchySync required.", SyncCollections::HIERARCHY_CHANGED);
                 } else {
@@ -10544,7 +10687,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Notification received for MONITORED folder(s) ['. implode( ", ", $notifications ) .']' );
             $this->ClearCache( $clearCacheList );
 
-            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Notification of item creation - Need to Force _folders refresh ! ' );
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ChangesSink(): ' .  'Notification of item creation/modification/deletion - Need to Force _folders refresh ! ' );
             // Mark _cacheChangeToken as ForceRefresh to make sure _folders gets refreshed
             // Changes to linked folders, notified here, will not update the ChangeToken for the current user
             $this->_cacheChangeToken = "ForceRefresh";
@@ -10583,12 +10726,34 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
         $stat = false;
         $index = $this->GetFolderIndex($folderid);
         if ($index>=0) {
-//            if (strpos($folderid, '-') !== false) {
-//                ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderStat(): ' . 'GetFolderStat { folderid = ' . $folderid . ' is a Shared Folder; returning stat = false }');
-//            } else {
-//                ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderStat(): ' . 'GetFolderStat { folderid = ' . $folderid . '; stat = ' . $this->_folders[$index]->stats .' }');
-                $stat = $this->_folders[$index]->stats;  
-//            }
+            $stat = $this->_folders[$index]->stats;  
+            $view = $this->_folders[$index]->view;  
+
+            // Z-Push calls GetFolderStat() to compare what it knows to what the server currently has for each folder. In the
+            // zimbra backend this is implemented by returning a string containing the Folder name and metadata.
+            // For situations (Outlook Contacts for example) where virtual folders are needed, a change to an item in any folder
+            // other than the Primary one will get flagged and the stats of it's folder will get updated. But as the z-push server 
+            // only knows to query the stats of the Primary so it will never realise it needs to do a refresh on the virtual folder
+            // We need to add an indicator to the Primary folder stats to alert about a change on any virtual folder. This has been 
+            // implemented by stringing together hashes of the stats from all virtual folders of the primary folder's type, and   
+            // adding a hash of the resultant string to the stats returned by the backend for the Primary folder. Any change to the
+            // virtual folders should change the hash and cause the change in the virtual folder being synced to the device.
+
+            if ( isset($this->_primary[$view]) && ($this->_folders[$index]->devid == $this->_primary[$view]) ) {
+                ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderStat(): ' . 'GetFolderStat { folderid = ' . $folderid . '; IS A PRIMARY FOLDER for [' . $view . ']; stat = ' . $this->_folders[$index]->stats .' }');
+                if ($this->_deviceMultiFolderSupport[$view] === false) {
+                    $hashList = "";
+                    ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderStat(): ' . 'GetFolderStat { Multi-Folder Support NOT AVAILABLE for [' . $view . ']; Process Folder list to generate Hash! }');
+                    for ($i=0;$i<count($this->_folders);$i++) {
+                        if (( 1 == $this->_folders[$i]->virtual ) && ($view == $this->_folders[$i]->view )) {
+//                            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderStat(): ' . 'GetFolderStat { folderid = ' . $this->_folders[$i]->devid . '; is a VIRTUAL [' . $view . '] folder; }');
+                            $hashList .= hash( 'crc32b', $this->_folders[$i]->stats );
+                        }
+                    }
+                    $stat .= '#' . hash( 'crc32b', $hashList );  
+                }
+            }
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderStat(): ' . 'GetFolderStat { folderid = ' . $folderid . '; Returned stat = ' . $stat .' }');
         } else {
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetFolderStat(): ' . 'GetFolderStat { folderid = ' . $folderid . ' NOT FOUND; returning stat = false }');
         }
@@ -10837,7 +11002,7 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->ResolveRecipients(): ' .  'Maxcerts ['.$max
     public function SendMail($syncsm) {
         ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' . 'START SendMail { $syncsm = (excluded); }');
 
-//ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'SyncSm ['.print_r( $syncsm, true ).']' );
+ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'SyncSm ['.print_r( $syncsm, true ).']' );
 
 /*
 class SyncSendMail extends SyncObject {
@@ -10858,17 +11023,24 @@ class SyncSendMailSource extends SyncObject {
     public $instanceid;
 */
 
+		$folderid = false;
 		$forward = false;
 		$reply = false;
         $saveinsent = false;
         $replaceMIME = false;
 
+        if (isset($syncsm->source->folderid)) {
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Folder of Original [' . $folderid .']' );
+            $folderid = $syncsm->source->folderid;
+        }
         if (isset($syncsm->replyflag)) {
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Reply flag is SET' );
             $reply = $syncsm->source->itemid;
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Reply to Item [' . $reply . ']' );
         } elseif (isset($syncsm->forwardflag)) {
             ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Forward flag is SET' );
             $forward = $syncsm->source->itemid;
+            ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Forward Item [' . $forward . ']' );
 		}
 
         if (isset($syncsm->saveinsent)) {
@@ -11041,7 +11213,14 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Plain-AS-HTML ['.$textash
 
                 ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' . 'Grabbing the Original' );
 
-                $folderid = false;
+                // 20200922 - Code added to prepend folder owner to original for item from shared folder
+				//            This is a workaround for a z-push issue https://forum.kopano.io/topic/3378/smartforward-itemid-in-composemail-object-is-changed
+                $index = $this->GetFolderIndex($folderid);
+                if ($this->_folders[$index]->linkid != '') {
+                    $ownerFolder = explode( ":", $this->_folders[$index]->linkid);
+                    $original = $ownerFolder[0] . ":" . $original;
+                }
+
                 $needHtml = true;
                 $needPlain = true;
                 $orig_calendar = "";
@@ -11832,8 +12011,11 @@ ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->SendMail(): ' .  'Plain-AS-HTML ['.$textash
             ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . $this->error);
             $response = false;
             if ($this->_soapError == "service.AUTH_EXPIRED") {
-                ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'zimbra Auth Token has expired - Throw SYNC_COMMONSTATUS_SERVERERROR to force a new connection/re-auth' );
-                throw new StatusException("Zimbra->SoapRequest(): Auth Token Expired - Force client to reconnect.", SYNC_COMMONSTATUS_SERVERERROR);
+                ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'zimbra Auth Token has expired - Throw AuthenticationRequiredException to force a new connection/re-auth' );
+                throw new AuthenticationRequiredException("Zimbra->SoapRequest(): Auth Token Expired - Force client to reconnect.");
+            } elseif ($this->_soapError == "account.AUTH_FAILED") {
+                ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'zimbra Auth Failed - Throw AuthenticationRequiredException to force a new connection/re-auth' );
+                throw new AuthenticationRequiredException("Zimbra->SoapRequest(): Auth Failed - Force client to reconnect.");
             } elseif ($this->_soapError == "service.PERM_DENIED") {
                 ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'SOAP Message: '.$soap_message_debug);
                 ZLog::Write(LOGLEVEL_ERROR, 'Zimbra->SoapRequest(): ' . 'SOAP Response: '.$response, false);
@@ -12884,7 +13066,7 @@ class BackendSearchZimbra implements ISearchProvider {
         ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMailboxSearchResults(): ' .  'START GetMailboxSearchResults { cpo = ' . print_r( $cpo, true ) . ' }');
 
         $total = 0;
-        $rangeMax = 999999;  // Max allowed for Mailbox Search Results
+        $rangeMax = 999;  // Max allowed for Mailbox Search Results
 
         ZLog::Write(LOGLEVEL_DEBUG, 'Zimbra->GetMailboxSearchResults(): ' .  'Mailbox search ' );
 
